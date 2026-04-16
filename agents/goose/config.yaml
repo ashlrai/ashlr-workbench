@@ -1,0 +1,183 @@
+# Goose configuration for the ashlr-workbench.
+#
+# This file is the authoritative source. It is NOT read directly by Goose.
+# `scripts/start-goose.sh` copies it to `./config/config.yaml` and sets
+# `GOOSE_PATH_ROOT` to this directory so Goose picks it up at runtime without
+# clobbering your global `~/.config/goose/config.yaml`.
+#
+# To edit: modify this file and re-run `./scripts/start-goose.sh` — the start
+# script copies it on every launch. Do not edit `./config/config.yaml` (it's
+# regenerated and gitignored).
+
+# ─── Model ────────────────────────────────────────────────────────────────────
+# LM Studio running Qwen3-Coder-30B on the default port. The OpenAI provider
+# is a generic OpenAI-compatible client; Goose concatenates OPENAI_HOST with
+# "v1/chat/completions" when talking to the server, so OPENAI_HOST must NOT
+# include the /v1 suffix.
+GOOSE_PROVIDER: "openai"
+GOOSE_MODEL: "qwen/qwen3-coder-30b"
+OPENAI_HOST: "http://localhost:1234"
+OPENAI_BASE_PATH: "v1/chat/completions"
+# LM Studio ignores the key, but Goose requires a non-empty value to skip the
+# keyring lookup. Leaving this literal is intentional — do not replace with a
+# real OpenAI key (it would silently succeed against api.openai.com if HOST is
+# ever unset). The keyring is disabled in start-goose.sh to guarantee this
+# value is used.
+OPENAI_API_KEY: "lm-studio"
+
+# ─── Agent behaviour ──────────────────────────────────────────────────────────
+# `smart_approve` — Goose auto-approves low-risk tool calls and prompts for
+# destructive ones. Swap to `chat` for a read-only assistant or `auto` for
+# full autonomy (matches OpenHands' posture).
+GOOSE_MODE: "smart_approve"
+GOOSE_TEMPERATURE: 0.2
+# The 30B local model has a 32k context window in LM Studio's default load.
+# Keep replies tight so we don't blow through context on tool-heavy turns.
+GOOSE_MAX_TOKENS: 4096
+GOOSE_CLI_MIN_PRIORITY: 0.2
+
+# ─── Workspace ────────────────────────────────────────────────────────────────
+# Goose doesn't have a top-level "workspace" key — it uses the shell's cwd
+# when a session starts. `start-goose.sh` cd's into ~/Desktop before launching
+# so sessions default there. Change cwd at launch time, not here.
+
+# ─── Extensions (MCP servers) ─────────────────────────────────────────────────
+# All 10 ashlr-plugin MCP servers, wired through the plugin's self-healing
+# entrypoint (handles `bun install` on first launch). Each server exposes a
+# focused tool surface — see `agents/goose/README.md` for the tool inventory.
+#
+# The entrypoint path below assumes the ashlr-plugin lives at
+# ~/Desktop/ashlr-plugin. If you move the plugin, update ASHLR_PLUGIN_ROOT in
+# `scripts/start-goose.sh` (the path is injected via env var at launch).
+extensions:
+  ashlr-efficiency:
+    enabled: true
+    type: stdio
+    name: ashlr-efficiency
+    description: "Token-efficient Read/Grep/Edit and session savings reporter."
+    cmd: bash
+    args:
+      - "${ASHLR_PLUGIN_ROOT}/scripts/mcp-entrypoint.sh"
+      - "servers/efficiency-server.ts"
+    timeout: 300
+    bundled: false
+
+  ashlr-sql:
+    enabled: true
+    type: stdio
+    name: ashlr-sql
+    description: "Read-only SQL query tool for SQLite/Postgres/MySQL."
+    cmd: bash
+    args:
+      - "${ASHLR_PLUGIN_ROOT}/scripts/mcp-entrypoint.sh"
+      - "servers/sql-server.ts"
+    timeout: 300
+    bundled: false
+
+  ashlr-bash:
+    enabled: true
+    type: stdio
+    name: ashlr-bash
+    description: "Sandboxed bash with background-process support (start/tail/stop/list)."
+    cmd: bash
+    args:
+      - "${ASHLR_PLUGIN_ROOT}/scripts/mcp-entrypoint.sh"
+      - "servers/bash-server.ts"
+    timeout: 600
+    bundled: false
+
+  ashlr-tree:
+    enabled: true
+    type: stdio
+    name: ashlr-tree
+    description: "Directory tree listing with smart depth limits."
+    cmd: bash
+    args:
+      - "${ASHLR_PLUGIN_ROOT}/scripts/mcp-entrypoint.sh"
+      - "servers/tree-server.ts"
+    timeout: 120
+    bundled: false
+
+  ashlr-http:
+    enabled: true
+    type: stdio
+    name: ashlr-http
+    description: "HTTP fetch with response summarization."
+    cmd: bash
+    args:
+      - "${ASHLR_PLUGIN_ROOT}/scripts/mcp-entrypoint.sh"
+      - "servers/http-server.ts"
+    timeout: 120
+    bundled: false
+
+  ashlr-diff:
+    enabled: true
+    type: stdio
+    name: ashlr-diff
+    description: "Compact unified diffs between files, commits, or strings."
+    cmd: bash
+    args:
+      - "${ASHLR_PLUGIN_ROOT}/scripts/mcp-entrypoint.sh"
+      - "servers/diff-server.ts"
+    timeout: 120
+    bundled: false
+
+  ashlr-logs:
+    enabled: true
+    type: stdio
+    name: ashlr-logs
+    description: "Log tail/grep with intelligent truncation."
+    cmd: bash
+    args:
+      - "${ASHLR_PLUGIN_ROOT}/scripts/mcp-entrypoint.sh"
+      - "servers/logs-server.ts"
+    timeout: 300
+    bundled: false
+
+  ashlr-genome:
+    enabled: true
+    type: stdio
+    name: ashlr-genome
+    description: "Genome-RAG codebase index (propose/consolidate/status)."
+    cmd: bash
+    args:
+      - "${ASHLR_PLUGIN_ROOT}/scripts/mcp-entrypoint.sh"
+      - "servers/genome-server.ts"
+    timeout: 600
+    bundled: false
+
+  ashlr-orient:
+    enabled: true
+    type: stdio
+    name: ashlr-orient
+    description: "Fast 'what is this repo' orientation summary."
+    cmd: bash
+    args:
+      - "${ASHLR_PLUGIN_ROOT}/scripts/mcp-entrypoint.sh"
+      - "servers/orient-server.ts"
+    timeout: 300
+    bundled: false
+
+  ashlr-github:
+    enabled: true
+    type: stdio
+    name: ashlr-github
+    description: "Compact GitHub PR + issue reader (uses local gh auth)."
+    cmd: bash
+    args:
+      - "${ASHLR_PLUGIN_ROOT}/scripts/mcp-entrypoint.sh"
+      - "servers/github-server.ts"
+    timeout: 300
+    bundled: false
+
+# ─── Builtin extensions ───────────────────────────────────────────────────────
+# `developer` gives Goose its native file/shell/text-editor tools. We keep it
+# on so Goose can still work on fresh machines where the ashlr-plugin MCPs
+# aren't healthy yet — the ashlr tools are strictly better (token-efficient),
+# but the builtins are the guaranteed fallback.
+  developer:
+    enabled: true
+    type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
