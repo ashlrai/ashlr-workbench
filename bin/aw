@@ -12,6 +12,7 @@
 #   health          full healthcheck (delegates to scripts/healthcheck.sh)
 #   update          update everything (delegates to scripts/update-all.sh)
 #   doctor          diagnose common issues + suggest fixes
+#   log <subcmd>    view the cross-agent session log (delegates to bin/aw-log)
 #   help            show this help
 #
 # Install on PATH (review first, then run):
@@ -392,6 +393,7 @@ ${C_BOLD}COMMANDS${C_RESET}
   ${C_CYAN}health${C_RESET}          full healthcheck (delegates to scripts/healthcheck.sh)
   ${C_CYAN}update${C_RESET}          update agents + plugin (delegates to scripts/update-all.sh)
   ${C_CYAN}doctor${C_RESET}          diagnose common issues + suggest fixes
+  ${C_CYAN}log${C_RESET} <subcmd>     view the cross-agent session log (tail/recent/stats/filter/rotate)
   ${C_CYAN}help${C_RESET}            show this message
 
 ${C_BOLD}EXAMPLES${C_RESET}
@@ -424,6 +426,7 @@ case "$cmd" in
   health|healthcheck) cmd_health "$@" ;;
   update|upgrade)     cmd_update "$@" ;;
   doctor|diagnose)    cmd_doctor "$@" ;;
+  log)                exec "$BIN_DIR/aw-log" "$@" ;;
   help|-h|--help)     cmd_help        ;;
   *)
     bad "unknown command: $cmd"
