@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+# aw-log — cross-agent shared session log viewer.
+#
+# Reads/tails ~/.ashlr/session-log.jsonl (see
+# @ashlr/core-efficiency/src/session-log). Every Ashlr-ecosystem coding agent
+# appends to this file; this CLI is the operator-side lens.
+#
+# Subcommands:
+#   tail [--agent N]     stream new entries, colorized per agent
+#   recent [N]           dump the last N entries (default 20)
+#   stats                counts by agent / event + last-24h activity
+#   filter --agent N     print all entries matching agent (most-recent-first)
+#   rotate               force rotation (rename → .jsonl.1, start fresh)
+#   help | --help        show this help
+#
+# Design notes:
+#   - Zero runtime deps. Pure bash + awk + /usr/bin/python3. No jq, no node.
+#   - Reads the JSONL file directly so users don't need `npm link`ed core-efficiency.
+#   - Honors NO_COLOR and non-TTY stdout.
+#   - Respects $ASHLR_SESSION_LOG_PATH.
+
+set -uo pipefail
+
+# ─── Resolve log path ─────────────────────────────────────────────────────────
+LOG_PATH="${ASHLR_SESSION_LOG_PATH:-$HOME/.ashlr/session-log.jsonl}"
+
+# ─── Colors (NO_COLOR-aware, TTY-aware) ───────────────────────────────────────
+if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then
+  C_RESET=""; C_DIM=""; C_BOLD=""
+  C_CYAN=""; C_MAGENTA=""; C_YELLOW=""; C_GREEN=""; C_BLUE=""
+  C_RED=""; C_GRAY=""
+else
+  C_RESET=$'\033[0m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'
+  C_CYAN=$'\033[36m'; C_MAGENTA=$'\033[35m'; C_YELLOW=$'\033[33m'
+  C_GREEN=$'\033[32m'; C_BLUE=$'\033[34m'
+  C_RED=$'\033[31m'; C_GRAY=$'\033[90m'
+fi
+
+# Agent → color. Keep in sync with docs/integration/session-log.md.
+agent_color() {
+  case "$1" in
+    claude-code) printf '%s' "$C_CYAN" ;;
+    openhands)   printf '%s' "$C_MAGENTA" ;;
+    goose)       printf '%s' "$C_YELLOW" ;;
+    aider)       printf '%s' "$C_GREEN" ;;
+    ashlrcode)   printf '%s' "$C_BLUE" ;;
+    *)           printf '%s' "$C_GRAY" ;;
+  esac
+}
+
+die() { printf "%saw-log:%s %s\n" "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+
+# ─── Shared: parse+format one JSONL line via python3 ──────────────────────────
+# Using python3 because it's on every mac/linux by default; jq is not. Pulls
+# the fields we display and returns a single tab-separated line per entry so
+# bash can colorize the agent column without reparsing.
+#
+# Args: none. Reads JSONL on stdin, writes TSV on stdout:
+#   ts<TAB>agent<TAB>event<TAB>summary
+#
+# Lines that fail to parse are silently dropped (matches the library's
+# defensive-read behavior).
+format_entries() {
+  python3 -c '
+import sys, json
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw:
+        continue
+    try:
+        o = json.loads(raw)
+    except Exception:
+        continue
+    if not isinstance(o, dict):
+        continue
+    ts = o.get("ts", "")
+    agent = o.get("agent", "?")
+    event = o.get("event", "?")
+    summary = o.get("summary", "")
+    tool = o.get("tool", "")
+    path = o.get("path", "")
+    # Build a fallback summary if none.
+    if not summary:
+        parts = []
+        if tool: parts.append(tool)
+        if path: parts.append(path)
+        summary = " ".join(parts)
+    # TSV — agent / event cannot contain tabs in practice; summary we sanitize.
+    summary = summary.replace("\t", " ").replace("\n", " ")
+    print("\t".join([ts, agent, event, summary]))
+'
+}
+
+render_line() {
+  # $1=ts, $2=agent, $3=event, $4=summary
+  local ts="$1" agent="$2" event="$3" summary="$4"
+  local ac; ac="$(agent_color "$agent")"
+  printf "%s%s%s  %s%-11s%s  %s%-14s%s  %s\n" \
+    "$C_DIM" "$ts" "$C_RESET" \
+    "$ac" "$agent" "$C_RESET" \
+    "$C_BOLD" "$event" "$C_RESET" \
+    "$summary"
+}
+
+# Feeds TSV into render_line. Keeps all the formatting decisions in one place.
+render_tsv() {
+  while IFS=$'\t' read -r ts agent event summary; do
+    [ -z "$ts" ] && continue
+    render_line "$ts" "$agent" "$event" "$summary"
+  done
+}
+
+ensure_log_readable() {
+  if [ ! -f "$LOG_PATH" ]; then
+    printf "%s(no session log yet at %s)%s\n" "$C_DIM" "$LOG_PATH" "$C_RESET"
+    return 1
+  fi
+  return 0
+}
+
+# ─── cmd: help ────────────────────────────────────────────────────────────────
+cmd_help() {
+  cat <<EOF
+${C_BOLD}aw-log${C_RESET} — cross-agent shared session log viewer
+
+${C_BOLD}USAGE${C_RESET}
+  aw-log <command> [args]
+
+${C_BOLD}COMMANDS${C_RESET}
+  tail [--agent <name>]     stream new entries as they are appended
+  recent [N]                last N entries (default 20), newest first
+  stats                     counts by agent / event + last-24h activity
+  filter --agent <name>     all entries matching agent (newest first)
+  rotate                    force rotation (renames → .jsonl.1)
+  help                      show this help
+
+${C_BOLD}FILE${C_RESET}
+  $LOG_PATH
+  (override via \$ASHLR_SESSION_LOG_PATH)
+
+${C_BOLD}AGENT COLORS${C_RESET}
+  $(agent_color claude-code)claude-code$C_RESET   $(agent_color openhands)openhands$C_RESET   $(agent_color goose)goose$C_RESET   $(agent_color aider)aider$C_RESET   $(agent_color ashlrcode)ashlrcode$C_RESET
+
+${C_BOLD}SEE ALSO${C_RESET}
+  docs/integration/session-log.md    per-agent enablement
+EOF
+}
+
+# ─── cmd: recent ──────────────────────────────────────────────────────────────
+cmd_recent() {
+  local n="${1:-20}"
+  case "$n" in
+    ''|*[!0-9]*) die "recent: N must be a positive integer, got '$n'" ;;
+  esac
+  ensure_log_readable || return 0
+
+  # tail from the END of the file, then format. `tail -n N` gives newest-last;
+  # we reverse via awk so the output is newest-first (matches library `read`).
+  tail -n "$n" "$LOG_PATH" \
+    | format_entries \
+    | awk '{ a[NR] = $0 } END { for (i = NR; i >= 1; i--) print a[i] }' \
+    | render_tsv
+}
+
+# ─── cmd: tail ────────────────────────────────────────────────────────────────
+cmd_tail() {
+  local agent_filter=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --agent) agent_filter="${2:-}"; shift 2 || die "tail: --agent needs a value" ;;
+      --agent=*) agent_filter="${1#--agent=}"; shift ;;
+      -h|--help) cmd_help; return 0 ;;
+      *) die "tail: unknown arg '$1'" ;;
+    esac
+  done
+
+  # Create the file if missing so `tail -F` has something to bind to.
+  mkdir -p "$(dirname "$LOG_PATH")"
+  [ -f "$LOG_PATH" ] || : > "$LOG_PATH"
+
+  printf "%s# tailing %s (Ctrl-C to exit)%s\n" "$C_DIM" "$LOG_PATH" "$C_RESET"
+
+  # `tail -F` follows across rotation (unlike `tail -f`). -n 0 = start at EOF.
+  if [ -n "$agent_filter" ]; then
+    tail -n 0 -F "$LOG_PATH" 2>/dev/null \
+      | format_entries \
+      | awk -F'\t' -v a="$agent_filter" '$2 == a' \
+      | render_tsv
+  else
+    tail -n 0 -F "$LOG_PATH" 2>/dev/null \
+      | format_entries \
+      | render_tsv
+  fi
+}
+
+# ─── cmd: filter ──────────────────────────────────────────────────────────────
+cmd_filter() {
+  local agent_filter=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --agent) agent_filter="${2:-}"; shift 2 || die "filter: --agent needs a value" ;;
+      --agent=*) agent_filter="${1#--agent=}"; shift ;;
+      -h|--help) cmd_help; return 0 ;;
+      *) die "filter: unknown arg '$1'" ;;
+    esac
+  done
+  [ -n "$agent_filter" ] || die "filter: --agent <name> required"
+  ensure_log_readable || return 0
+
+  format_entries < "$LOG_PATH" \
+    | awk -F'\t' -v a="$agent_filter" '$2 == a' \
+    | awk '{ a[NR] = $0 } END { for (i = NR; i >= 1; i--) print a[i] }' \
+    | render_tsv
+}
+
+# ─── cmd: stats ───────────────────────────────────────────────────────────────
+cmd_stats() {
+  ensure_log_readable || return 0
+
+  python3 - "$LOG_PATH" <<'PY'
+import json, os, sys
+from collections import Counter
+from datetime import datetime, timedelta, timezone
+
+path = sys.argv[1]
+by_agent = Counter()
+by_event = Counter()
+last_24h = 0
+total = 0
+cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+
+earliest = None
+latest = None
+
+with open(path, "r", encoding="utf-8", errors="replace") as fh:
+    for line in fh:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            o = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(o, dict):
+            continue
+        total += 1
+        by_agent[o.get("agent", "?")] += 1
+        by_event[o.get("event", "?")] += 1
+        ts = o.get("ts", "")
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt >= cutoff:
+                last_24h += 1
+            if earliest is None or dt < earliest:
+                earliest = dt
+            if latest is None or dt > latest:
+                latest = dt
+        except Exception:
+            pass
+
+try:
+    size = os.path.getsize(path)
+except OSError:
+    size = 0
+
+print(f"entries:       {total}")
+print(f"last 24h:      {last_24h}")
+print(f"file size:     {size:,} bytes")
+if earliest: print(f"earliest:      {earliest.isoformat()}")
+if latest:   print(f"latest:        {latest.isoformat()}")
+print()
+print("by agent:")
+for name, n in by_agent.most_common():
+    print(f"  {name:<15} {n}")
+print()
+print("by event:")
+for name, n in by_event.most_common():
+    print(f"  {name:<15} {n}")
+PY
+}
+
+# ─── cmd: rotate ──────────────────────────────────────────────────────────────
+cmd_rotate() {
+  if [ ! -f "$LOG_PATH" ]; then
+    printf "%s(no session log at %s — nothing to rotate)%s\n" "$C_DIM" "$LOG_PATH" "$C_RESET"
+    return 0
+  fi
+  mv -f "$LOG_PATH" "$LOG_PATH.1"
+  : > "$LOG_PATH"
+  printf "%s✓%s rotated → %s.1\n" "$C_GREEN" "$C_RESET" "$LOG_PATH"
+}
+
+# ─── dispatch ─────────────────────────────────────────────────────────────────
+main() {
+  local cmd="${1:-help}"
+  [ $# -gt 0 ] && shift
+  case "$cmd" in
+    tail)          cmd_tail "$@" ;;
+    recent)        cmd_recent "$@" ;;
+    stats)         cmd_stats "$@" ;;
+    filter)        cmd_filter "$@" ;;
+    rotate)        cmd_rotate "$@" ;;
+    help|-h|--help) cmd_help ;;
+    *) die "unknown command '$cmd' — try 'aw-log help'" ;;
+  esac
+}
+
+main "$@"
