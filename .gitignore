@@ -1,0 +1,49 @@
+# ─── Secrets + local state ────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+.ashlr/
+~/.openhands/
+~/.openhands-state/
+
+# ─── Per-agent runtime artifacts (regenerated on launch) ──────────────────────
+agents/goose/config/
+agents/goose/data/
+agents/goose/state/
+agents/openhands/.state/
+.ashlrcode-local/
+.aider.chat.history.md
+.aider.input.history
+.aider.tags.cache.v*
+
+# ─── Editor + OS noise ────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ─── Node / Bun ───────────────────────────────────────────────────────────────
+node_modules/
+.pnp.*
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+.venv/
+venv/
+.tox/
+
+# ─── Misc ─────────────────────────────────────────────────────────────────────
+*.tmp
+.cache/
+coverage/
+dist/
+build/

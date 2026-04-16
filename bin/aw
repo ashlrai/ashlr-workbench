@@ -1,0 +1,434 @@
+#!/usr/bin/env bash
+# aw — ashlr-workbench unified CLI.
+#
+# Single entrypoint that orchestrates the four agents (OpenHands, Goose, Aider,
+# ashlrcode) and reports on the supporting infrastructure (LM Studio, Ollama,
+# Docker, ashlr-plugin, MCP servers).
+#
+# Subcommands:
+#   start <agent>   start one agent or "all"
+#   stop <agent>    stop one agent (only OpenHands really needs it)
+#   status          combined health snapshot
+#   health          full healthcheck (delegates to scripts/healthcheck.sh)
+#   update          update everything (delegates to scripts/update-all.sh)
+#   doctor          diagnose common issues + suggest fixes
+#   help            show this help
+#
+# Install on PATH (review first, then run):
+#   ln -sf /Users/masonwyatt/Desktop/ashlr-workbench/bin/aw /usr/local/bin/aw
+
+set -uo pipefail
+
+# ─── Resolve paths ────────────────────────────────────────────────────────────
+# Resolve symlinks so the script works whether invoked directly or via the
+# /usr/local/bin/aw symlink.
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  link_target="$(readlink "$SCRIPT_PATH")"
+  case "$link_target" in
+    /*) SCRIPT_PATH="$link_target" ;;
+    *)  SCRIPT_PATH="$(dirname "$SCRIPT_PATH")/$link_target" ;;
+  esac
+done
+BIN_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+WORKBENCH="$(cd "$BIN_DIR/.." && pwd)"
+SCRIPTS_DIR="$WORKBENCH/scripts"
+AGENTS_DIR="$WORKBENCH/agents"
+
+ASHLR_PLUGIN_DIR="${ASHLR_PLUGIN_DIR:-$HOME/Desktop/ashlr-plugin}"
+LM_STUDIO_URL="${LM_STUDIO_URL:-http://localhost:1234/v1}"
+OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
+OPENHANDS_CONTAINER="ashlr-openhands"
+
+# ─── Colors (NO_COLOR-aware) ──────────────────────────────────────────────────
+if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then
+  C_RESET=""; C_DIM=""; C_BOLD=""
+  C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_CYAN=""; C_MAGENTA=""
+else
+  C_RESET=$'\033[0m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'
+  C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'; C_CYAN=$'\033[36m'; C_MAGENTA=$'\033[35m'
+fi
+
+ok()    { printf "  %s✓%s %s\n" "$C_GREEN"  "$C_RESET" "$*"; }
+warn()  { printf "  %s⚠%s %s\n" "$C_YELLOW" "$C_RESET" "$*"; }
+bad()   { printf "  %s✗%s %s\n" "$C_RED"    "$C_RESET" "$*"; }
+info()  { printf "  %s•%s %s\n" "$C_CYAN"   "$C_RESET" "$*"; }
+title() { printf "%s%s%s\n" "$C_BOLD" "$*" "$C_RESET"; }
+dim()   { printf "%s%s%s\n" "$C_DIM"  "$*" "$C_RESET"; }
+
+# ─── Subcommand dispatch helpers ──────────────────────────────────────────────
+require_agent() {
+  local agent="${1:-}"
+  if [ -z "$agent" ]; then
+    bad "missing agent name"
+    echo "Usage: aw $2 <openhands|goose|aider|ashlrcode|all>"
+    exit 2
+  fi
+  case "$agent" in
+    openhands|goose|aider|ashlrcode|all) return 0 ;;
+    *) bad "unknown agent: $agent"
+       echo "Valid: openhands, goose, aider, ashlrcode, all"
+       exit 2 ;;
+  esac
+}
+
+run_start_script() {
+  local agent="$1"; shift || true
+  local script="$SCRIPTS_DIR/start-${agent}.sh"
+  if [ ! -x "$script" ]; then
+    bad "start script not found or not executable: $script"
+    return 1
+  fi
+  title "Starting $agent..."
+  "$script" "$@"
+}
+
+run_stop_script() {
+  local agent="$1"
+  case "$agent" in
+    openhands)
+      local script="$SCRIPTS_DIR/stop-openhands.sh"
+      if [ -x "$script" ]; then
+        "$script"
+      else
+        bad "stop script not found: $script"
+        return 1
+      fi
+      ;;
+    goose|aider|ashlrcode)
+      info "$agent is an interactive CLI — exit the session in its terminal (Ctrl-D)"
+      ;;
+    all)
+      run_stop_script openhands
+      info "goose / aider / ashlrcode are interactive — close their terminals to stop"
+      ;;
+  esac
+}
+
+# ─── start ────────────────────────────────────────────────────────────────────
+cmd_start() {
+  local agent="${1:-}"
+  require_agent "$agent" "start"
+  shift || true
+  case "$agent" in
+    all)
+      # Only OpenHands is a daemon; the others would each need an interactive
+      # tty. Surface that explicitly rather than spawning broken sessions.
+      run_start_script openhands "$@" || true
+      echo
+      info "Goose, Aider, and ashlrcode are interactive — start them in their"
+      info "own terminals via:  aw start goose   |   aw start aider   |   aw start ashlrcode"
+      ;;
+    *)
+      run_start_script "$agent" "$@"
+      ;;
+  esac
+}
+
+# ─── stop ─────────────────────────────────────────────────────────────────────
+cmd_stop() {
+  local agent="${1:-}"
+  require_agent "$agent" "stop"
+  run_stop_script "$agent"
+}
+
+# ─── status ───────────────────────────────────────────────────────────────────
+have() { command -v "$1" >/dev/null 2>&1; }
+
+http_ok() {
+  # http_ok URL [timeout]
+  local url="$1"; local t="${2:-2}"
+  curl -fsS --max-time "$t" "$url" >/dev/null 2>&1
+}
+
+cmd_status() {
+  title "ashlr-workbench status"
+  dim  "  workbench: $WORKBENCH"
+  echo
+
+  title "Agents"
+  # OpenHands — only one with a daemon
+  if have docker && docker inspect "$OPENHANDS_CONTAINER" >/dev/null 2>&1; then
+    local state
+    state="$(docker inspect -f '{{.State.Status}}' "$OPENHANDS_CONTAINER" 2>/dev/null || echo unknown)"
+    if [ "$state" = "running" ]; then
+      ok "openhands  running    (container=$OPENHANDS_CONTAINER, http://localhost:3000)"
+    else
+      warn "openhands  $state    (container=$OPENHANDS_CONTAINER — \`aw start openhands\` to relaunch)"
+    fi
+  else
+    info "openhands  not running (\`aw start openhands\`)"
+  fi
+  # CLI agents — show whether the binary is available; they're invoked per-session
+  if have goose;     then ok   "goose      installed   ($(command -v goose))";       else warn "goose      not on PATH"; fi
+  if have aider;     then ok   "aider      installed   ($(command -v aider))";       else warn "aider      not on PATH"; fi
+  if have ashlrcode; then ok   "ashlrcode  installed   ($(command -v ashlrcode))";   else warn "ashlrcode  not on PATH"; fi
+  echo
+
+  title "LLM endpoints"
+  if http_ok "$LM_STUDIO_URL/models" 3; then
+    local model
+    # LM Studio returns either {"data":[{"id":"…"}…]} or pretty-printed with
+    # whitespace between the colon and the value. Match both shapes.
+    model="$(curl -s --max-time 3 "$LM_STUDIO_URL/models" \
+              | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' \
+              | head -1 | sed 's/.*"\([^"]*\)"$/\1/' || true)"
+    if [ -n "$model" ]; then
+      ok "LM Studio  $LM_STUDIO_URL  (loaded: $model)"
+    else
+      warn "LM Studio  $LM_STUDIO_URL  reachable but no model loaded"
+    fi
+  else
+    bad "LM Studio  $LM_STUDIO_URL  not responding"
+  fi
+  if http_ok "$OLLAMA_URL/api/tags" 2; then
+    ok "Ollama     $OLLAMA_URL"
+  else
+    info "Ollama     $OLLAMA_URL  (optional, not running)"
+  fi
+  echo
+
+  title "Infrastructure"
+  if have docker && docker info >/dev/null 2>&1; then
+    ok "Docker daemon running"
+  else
+    bad "Docker daemon not running (start Docker Desktop)"
+  fi
+
+  # Disk space — POSIX df, parsed for the volume holding $HOME
+  local disk_free
+  disk_free="$(df -h "$HOME" 2>/dev/null | awk 'NR==2 {print $4}')"
+  if [ -n "$disk_free" ]; then
+    info "Free disk:    $disk_free on $(df -h "$HOME" | awk 'NR==2 {print $NF}')"
+  fi
+
+  # Memory — vm_stat on macOS
+  if [ "$(uname -s)" = "Darwin" ] && have vm_stat; then
+    local pages_free pages_inactive page_size free_gb
+    pages_free=$(vm_stat | awk '/Pages free/ {gsub("\\.",""); print $3}')
+    pages_inactive=$(vm_stat | awk '/Pages inactive/ {gsub("\\.",""); print $3}')
+    page_size=$(vm_stat | awk '/page size of/ {print $8}')
+    if [ -n "$pages_free" ] && [ -n "$page_size" ]; then
+      free_gb=$(( (pages_free + pages_inactive) * page_size / 1024 / 1024 / 1024 ))
+      info "Free RAM:     ${free_gb} GB (free + inactive)"
+    fi
+  fi
+  echo
+
+  title "ashlr-plugin"
+  if [ -d "$ASHLR_PLUGIN_DIR" ]; then
+    local version
+    version="$(grep '"version"' "$ASHLR_PLUGIN_DIR/.claude-plugin/plugin.json" 2>/dev/null \
+                | head -1 | cut -d'"' -f4 || echo unknown)"
+    ok "installed at $ASHLR_PLUGIN_DIR (v$version)"
+    if [ -d "$ASHLR_PLUGIN_DIR/.ashlrcode/genome" ]; then
+      local genome_files
+      genome_files="$(find "$ASHLR_PLUGIN_DIR/.ashlrcode/genome" -type f 2>/dev/null | wc -l | tr -d ' ')"
+      ok "genome present ($genome_files entries)"
+    else
+      info "genome not initialized (\`ashlr genome init\`)"
+    fi
+  else
+    bad "ashlr-plugin missing at $ASHLR_PLUGIN_DIR"
+  fi
+  echo
+
+  title "Workbench git"
+  if have git; then
+    ( cd "$WORKBENCH" && {
+      local branch dirty
+      branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+      dirty="$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+      if [ "$dirty" = "0" ]; then
+        ok "branch $branch (clean)"
+      else
+        warn "branch $branch ($dirty uncommitted changes)"
+      fi
+    } )
+  fi
+  echo
+  dim "Tip: run \`aw health\` for the full 13-point check."
+}
+
+# ─── health ───────────────────────────────────────────────────────────────────
+cmd_health() {
+  local script="$SCRIPTS_DIR/healthcheck.sh"
+  if [ -x "$script" ]; then
+    "$script" "$@"
+  else
+    bad "$script not found or not executable"
+    exit 1
+  fi
+}
+
+# ─── update ───────────────────────────────────────────────────────────────────
+cmd_update() {
+  local script="$SCRIPTS_DIR/update-all.sh"
+  if [ -x "$script" ]; then
+    "$script" "$@"
+  else
+    bad "$script not found or not executable"
+    exit 1
+  fi
+}
+
+# ─── doctor ───────────────────────────────────────────────────────────────────
+cmd_doctor() {
+  title "aw doctor — diagnosing common issues"
+  echo
+  local issues=0
+
+  # Docker
+  if ! have docker; then
+    bad "Docker CLI not installed"
+    info "  Fix: install Docker Desktop from https://www.docker.com/products/docker-desktop"
+    issues=$((issues+1))
+  elif ! docker info >/dev/null 2>&1; then
+    bad "Docker daemon not running"
+    info "  Fix: open Docker Desktop and wait for the whale icon to settle"
+    issues=$((issues+1))
+  else
+    ok "Docker OK"
+  fi
+
+  # LM Studio
+  if ! http_ok "$LM_STUDIO_URL/models" 3; then
+    bad "LM Studio not responding at $LM_STUDIO_URL"
+    info "  Fix: open LM Studio → Developer tab → Start Server"
+    info "       then load qwen/qwen3-coder-30b"
+    issues=$((issues+1))
+  else
+    local model
+    model="$(curl -s --max-time 3 "$LM_STUDIO_URL/models" \
+              | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' \
+              | head -1 | sed 's/.*"\([^"]*\)"$/\1/' || true)"
+    if [ -z "$model" ]; then
+      warn "LM Studio reachable but no model loaded"
+      info "  Fix: load qwen/qwen3-coder-30b in LM Studio"
+      issues=$((issues+1))
+    else
+      ok "LM Studio serving $model"
+    fi
+  fi
+
+  # ashlr-plugin
+  if [ ! -d "$ASHLR_PLUGIN_DIR" ]; then
+    bad "ashlr-plugin not found at $ASHLR_PLUGIN_DIR"
+    info "  Fix: git clone https://github.com/ashlrai/ashlr-plugin $ASHLR_PLUGIN_DIR"
+    issues=$((issues+1))
+  elif [ ! -d "$ASHLR_PLUGIN_DIR/node_modules/@modelcontextprotocol/sdk" ]; then
+    warn "ashlr-plugin deps not installed"
+    info "  Fix: cd $ASHLR_PLUGIN_DIR && bun install"
+    issues=$((issues+1))
+  else
+    ok "ashlr-plugin OK"
+  fi
+
+  # bun (required for MCP servers)
+  if ! have bun; then
+    bad "bun not on PATH (needed for ashlr-plugin MCP servers)"
+    info "  Fix: curl -fsSL https://bun.sh/install | bash"
+    issues=$((issues+1))
+  else
+    ok "bun on PATH ($(command -v bun))"
+  fi
+
+  # Agents
+  for tool in goose aider ashlrcode; do
+    if ! have "$tool"; then
+      warn "$tool not on PATH"
+      case "$tool" in
+        goose)     info "  Fix: $SCRIPTS_DIR/install-goose.sh" ;;
+        aider)     info "  Fix: pipx install aider-chat   (or pip install --user aider-chat)" ;;
+        ashlrcode) info "  Fix: npm install -g ashlrcode" ;;
+      esac
+      issues=$((issues+1))
+    else
+      ok "$tool installed"
+    fi
+  done
+
+  # Disk space
+  local free_kb free_gb
+  free_kb="$(df -k "$HOME" 2>/dev/null | awk 'NR==2 {print $4}')"
+  if [ -n "$free_kb" ]; then
+    free_gb=$(( free_kb / 1024 / 1024 ))
+    if [ "$free_gb" -lt 20 ]; then
+      warn "Free disk: ${free_gb} GB (recommend > 20 GB for Docker images + models)"
+      issues=$((issues+1))
+    else
+      ok "Free disk: ${free_gb} GB"
+    fi
+  fi
+
+  # OpenHands stale state
+  if [ -d "$HOME/.openhands-state" ]; then
+    warn "Legacy ~/.openhands-state directory found (V0 layout)"
+    info "  V1 uses ~/.openhands; the legacy dir is harmless but can be removed"
+  fi
+
+  echo
+  if [ "$issues" -eq 0 ]; then
+    ok "no issues detected"
+  else
+    warn "$issues issue(s) need attention"
+    exit 1
+  fi
+}
+
+# ─── help ─────────────────────────────────────────────────────────────────────
+cmd_help() {
+  cat <<EOF
+${C_BOLD}aw${C_RESET} — ashlr-workbench unified CLI
+
+${C_BOLD}USAGE${C_RESET}
+  aw <command> [args]
+
+${C_BOLD}COMMANDS${C_RESET}
+  ${C_CYAN}start${C_RESET} <agent>   start one agent (openhands|goose|aider|ashlrcode|all)
+  ${C_CYAN}stop${C_RESET}  <agent>   stop one agent (only openhands has a daemon)
+  ${C_CYAN}status${C_RESET}          combined snapshot: agents, LLMs, plugin, disk, RAM, git
+  ${C_CYAN}health${C_RESET}          full healthcheck (delegates to scripts/healthcheck.sh)
+  ${C_CYAN}update${C_RESET}          update agents + plugin (delegates to scripts/update-all.sh)
+  ${C_CYAN}doctor${C_RESET}          diagnose common issues + suggest fixes
+  ${C_CYAN}help${C_RESET}            show this message
+
+${C_BOLD}EXAMPLES${C_RESET}
+  aw start openhands       # launch the Docker daemon
+  aw start aider           # interactive Aider session in cwd
+  aw start goose -- --debug
+  aw status                # quick snapshot
+  aw health                # full 13-point check
+  aw doctor                # actionable diagnosis
+
+${C_BOLD}ENVIRONMENT${C_RESET}
+  LM_STUDIO_URL    default: http://localhost:1234/v1
+  OLLAMA_URL       default: http://localhost:11434
+  ASHLR_PLUGIN_DIR default: ~/Desktop/ashlr-plugin
+  NO_COLOR         disables ANSI colors
+
+${C_BOLD}INSTALL ON PATH${C_RESET}
+  ln -sf $WORKBENCH/bin/aw /usr/local/bin/aw
+EOF
+}
+
+# ─── Dispatch ─────────────────────────────────────────────────────────────────
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  start)              cmd_start  "$@" ;;
+  stop)               cmd_stop   "$@" ;;
+  status|st)          cmd_status "$@" ;;
+  health|healthcheck) cmd_health "$@" ;;
+  update|upgrade)     cmd_update "$@" ;;
+  doctor|diagnose)    cmd_doctor "$@" ;;
+  help|-h|--help)     cmd_help        ;;
+  *)
+    bad "unknown command: $cmd"
+    echo
+    cmd_help
+    exit 2
+    ;;
+esac

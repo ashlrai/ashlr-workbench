@@ -1,0 +1,66 @@
+# Aider config — Ashlr Workbench
+# Docs: https://aider.chat/docs/config/aider_conf.html
+#
+# This file is loaded explicitly by scripts/start-aider.sh via --config.
+# It wires Aider to the local LM Studio endpoint so every edit stays on-box.
+#
+# Model notes:
+#   qwen3-coder-30b is tuned for code edits and handles ~32k context well.
+#   Swap by passing --model on the launcher (e.g. `start-aider.sh . --model openai/qwen3-235b-a22b-thinking-2507`).
+
+# ------------------------------------------------------------------
+# Model + endpoint
+# ------------------------------------------------------------------
+model: openai/qwen3-coder-30b
+openai-api-base: http://localhost:1234/v1
+openai-api-key: lm-studio
+
+# ------------------------------------------------------------------
+# Git behavior — AGENT.md-style flow, no surprise commits
+# ------------------------------------------------------------------
+auto-commits: false
+dirty-commits: false
+attribute-author: false
+attribute-committer: false
+gitignore: true
+
+# Respect .aiderignore at repo root (same semantics as .gitignore)
+aiderignore: .aiderignore
+
+# ------------------------------------------------------------------
+# Repo map — Qwen3-Coder-30B tolerates a generous map budget
+# ------------------------------------------------------------------
+map-tokens: 4096
+map-refresh: auto
+
+# ------------------------------------------------------------------
+# UX — colors + streaming for readable terminal sessions
+# ------------------------------------------------------------------
+pretty: true
+stream: true
+show-diffs: true
+
+# Terminal colors (tuned for dark background)
+user-input-color: "#9cdcfe"
+assistant-output-color: "#c586c0"
+tool-output-color: "#6a9955"
+tool-error-color: "#f48771"
+tool-warning-color: "#dcdcaa"
+
+# ------------------------------------------------------------------
+# Quality-of-life
+# ------------------------------------------------------------------
+# Watch files for `# aider` comment triggers
+watch-files: true
+
+# Don't auto-lint or auto-test — let the human / AGENT.md drive those
+auto-lint: false
+auto-test: false
+
+# Suppress analytics + update checks (local-only workflow)
+analytics-disable: true
+check-update: false
+
+# Chat + input history local to the repo (add to .gitignore or .aiderignore)
+chat-history-file: .aider.chat.history.md
+input-history-file: .aider.input.history

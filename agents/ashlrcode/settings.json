@@ -1,0 +1,114 @@
+{
+  "_comment": "Ashlr Workbench overlay for ashlrcode. Loaded by scripts/start-ashlrcode.sh via ASHLRCODE_CONFIG_DIR. Inherits the user's default provider (xAI Grok) and adds LM Studio as an explicit fallback plus all ashlr-plugin MCP servers. Secrets are referenced by env var; populate XAI_API_KEY, SUPABASE_ACCESS_TOKEN, SUPABASE_PROJECT_REF in your shell or in a gitignored .env before launching.",
+  "providers": {
+    "primary": {
+      "provider": "xai",
+      "apiKeyEnvVar": "XAI_API_KEY",
+      "model": "grok-4-1-fast-reasoning",
+      "baseURL": "https://api.x.ai/v1"
+    },
+    "fallbacks": [
+      {
+        "provider": "openai",
+        "apiKey": "lm-studio",
+        "model": "qwen/qwen3-coder-30b",
+        "baseURL": "http://localhost:1234/v1",
+        "label": "lmstudio-local"
+      }
+    ]
+  },
+  "maxTokens": 8192,
+  "provider": {
+    "apiKeyEnvVar": "XAI_API_KEY"
+  },
+  "approveMode": "default",
+  "autoAcceptEdits": false,
+  "dangerouslySkipPermissions": false,
+  "hooks": {
+    "preToolUse": [
+      { "toolName": "Bash", "inputPattern": "rm -rf",      "action": "deny", "message": "Refusing rm -rf — destructive command blocked" },
+      { "toolName": "Read", "inputPattern": "\\.env",      "action": "deny", "message": "Reading .env files is not allowed" },
+      { "toolName": "Bash", "inputPattern": "git push",    "action": "ask",  "message": "Confirm before pushing to remote" },
+      { "toolName": "Bash", "inputPattern": "npm publish", "action": "ask",  "message": "Confirm before publishing to npm" },
+      { "toolName": "Bash", "inputPattern": "npm run test:", "action": "allow" },
+      { "toolName": "Bash", "inputPattern": "bun run build:", "action": "allow" },
+      { "toolName": "Bash", "inputPattern": "git diff",    "action": "allow" },
+      { "toolName": "Bash", "inputPattern": "curl",        "action": "allow" },
+      { "toolName": "Bash", "inputPattern": "obsidian",    "action": "allow" }
+    ],
+    "postToolUse": [],
+    "sessionStart": [
+      { "command": "bash ~/.claude/scripts/auto-sync.sh", "timeout": 15000 }
+    ]
+  },
+  "mcpServers": {
+    "ashlr-efficiency": {
+      "command": "bash",
+      "args": ["/Users/masonwyatt/Desktop/ashlr-plugin/scripts/mcp-entrypoint.sh", "servers/efficiency-server.ts"]
+    },
+    "ashlr-sql": {
+      "command": "bash",
+      "args": ["/Users/masonwyatt/Desktop/ashlr-plugin/scripts/mcp-entrypoint.sh", "servers/sql-server.ts"]
+    },
+    "ashlr-bash": {
+      "command": "bash",
+      "args": ["/Users/masonwyatt/Desktop/ashlr-plugin/scripts/mcp-entrypoint.sh", "servers/bash-server.ts"]
+    },
+    "ashlr-tree": {
+      "command": "bash",
+      "args": ["/Users/masonwyatt/Desktop/ashlr-plugin/scripts/mcp-entrypoint.sh", "servers/tree-server.ts"]
+    },
+    "ashlr-http": {
+      "command": "bash",
+      "args": ["/Users/masonwyatt/Desktop/ashlr-plugin/scripts/mcp-entrypoint.sh", "servers/http-server.ts"]
+    },
+    "ashlr-diff": {
+      "command": "bash",
+      "args": ["/Users/masonwyatt/Desktop/ashlr-plugin/scripts/mcp-entrypoint.sh", "servers/diff-server.ts"]
+    },
+    "ashlr-logs": {
+      "command": "bash",
+      "args": ["/Users/masonwyatt/Desktop/ashlr-plugin/scripts/mcp-entrypoint.sh", "servers/logs-server.ts"]
+    },
+    "ashlr-genome": {
+      "command": "bash",
+      "args": ["/Users/masonwyatt/Desktop/ashlr-plugin/scripts/mcp-entrypoint.sh", "servers/genome-server.ts"]
+    },
+    "ashlr-orient": {
+      "command": "bash",
+      "args": ["/Users/masonwyatt/Desktop/ashlr-plugin/scripts/mcp-entrypoint.sh", "servers/orient-server.ts"]
+    },
+    "ashlr-github": {
+      "command": "bash",
+      "args": ["/Users/masonwyatt/Desktop/ashlr-plugin/scripts/mcp-entrypoint.sh", "servers/github-server.ts"]
+    },
+    "supabase": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase",
+        "--access-token",
+        "${SUPABASE_ACCESS_TOKEN}",
+        "--project-ref",
+        "${SUPABASE_PROJECT_REF}"
+      ],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": "${SUPABASE_ACCESS_TOKEN}",
+        "SUPABASE_PROJECT_REF": "${SUPABASE_PROJECT_REF}"
+      }
+    },
+    "roblox-studio": {
+      "command": "/Applications/RobloxStudio.app/Contents/MacOS/StudioMCP",
+      "args": ["--stdio"]
+    }
+  },
+  "permissionRules": [
+    { "tool": "Bash(npm run test:*)",  "action": "allow" },
+    { "tool": "Bash(bun run build:*)", "action": "allow" },
+    { "tool": "Bash(git diff:*)",      "action": "allow" },
+    { "tool": "Bash(curl:*)",          "action": "allow" },
+    { "tool": "Bash(obsidian:*)",      "action": "allow" },
+    { "tool": "Read(.env*)",           "action": "deny"  },
+    { "tool": "Bash(rm -rf:*)",        "action": "deny"  }
+  ]
+}
