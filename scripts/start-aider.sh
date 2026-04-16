@@ -32,5 +32,14 @@ if ! curl -fsS "$ENDPOINT/models" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Session log (cross-agent trace). Aider is interactive, so session_end fires
+# when the user quits the REPL.
+# shellcheck source=lib/session-log.sh
+. "$(dirname "$0")/lib/session-log.sh"
+log_session_start aider "$PROJECT_DIR"
+trap 'log_session_end aider "$PROJECT_DIR"' EXIT
+
 cd "$PROJECT_DIR"
-exec aider --config "$CONFIG" "$@"
+# Run (don't exec) so the EXIT trap fires and writes session_end.
+aider --config "$CONFIG" "$@"
+exit $?

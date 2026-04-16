@@ -49,6 +49,16 @@ log() { printf "\033[36m[start]\033[0m %s\n" "$*"; }
 warn() { printf "\033[33m[start]\033[0m %s\n" "$*"; }
 err() { printf "\033[31m[start]\033[0m %s\n" "$*" >&2; }
 
+# ---- session log (cross-agent trace) ----
+# OpenHands daemonizes via `docker run -d`, so the "session" we log here is
+# the launcher's lifetime — session_start at the top and session_end when the
+# launcher returns (after the GUI health check). Container lifetime is
+# separately visible via `aw status` / `docker ps`.
+# shellcheck source=lib/session-log.sh
+. "$SCRIPT_DIR/lib/session-log.sh"
+log_session_start openhands "$WORKSPACE_HOST"
+trap 'log_session_end openhands "$WORKSPACE_HOST"' EXIT
+
 # ---- 1. preflight ----
 log "Preflight checks..."
 
@@ -149,8 +159,14 @@ with open(settings_path) as f:
     s = json.load(f)
 with open(mcp_path) as f:
     m = json.load(f)
-# Strip _comment keys from the mcp config payload before persisting.
-clean = {k: v for k, v in m.items() if not k.startswith('_')}
+# OpenHands 1.6's Settings.mcp_config pydantic model (MCPConfig) requires the
+# shape: {stdio_servers:[{name,command,args,env}], sse_servers:[...], shttp_servers:[...]}.
+# It forbids extra keys, so we strip _comment and any non-schema fields.
+allowed = {"stdio_servers", "sse_servers", "shttp_servers"}
+clean = {k: v for k, v in m.items() if k in allowed}
+# Default missing arrays to [] so the settings endpoint doesn't 500 on first boot.
+for k in allowed:
+    clean.setdefault(k, [])
 s["mcp_config"] = clean
 # Keep LLM in sync with what we pass via env, in case the UI is the one
 # users edit going forward.
@@ -159,7 +175,7 @@ s["llm_base_url"] = llm_base
 s["llm_api_key"] = llm_key
 with open(settings_path, "w") as f:
     json.dump(s, f, indent=2)
-print(f"settings.json updated ({len(clean.get('mcpServers', {}))} MCP servers).")
+print(f"settings.json updated ({len(clean.get('stdio_servers', []))} stdio MCP servers).")
 PY
 
 # ---- 5. remove any stale container with same name ----
@@ -185,7 +201,7 @@ docker run -d \
   -p "${PORT}:3000" \
   $ADD_HOST \
   -e LOG_ALL_EVENTS=true \
-  -e SANDBOX_VOLUMES="${WORKSPACE_HOST}:/workspace:rw" \
+  -e SANDBOX_VOLUMES="${WORKSPACE_HOST}:/workspace:rw,${ASHLR_PLUGIN_DIR}:/host/ashlr-plugin:ro,${BUN_DIR}:/host/bun:ro" \
   -e SANDBOX_USER_ID="$(id -u)" \
   -e WORKSPACE_MOUNT_PATH_IN_SANDBOX=/workspace \
   -e LLM_BASE_URL="$LLM_BASE_URL" \

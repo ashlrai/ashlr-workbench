@@ -57,4 +57,12 @@ export ASHLRCODE_CONFIG_DIR="$WB_CONFIG_DIR"
 # MCP config path merged on top of ~/.ashlrcode/settings.json.
 export ASHLR_MCP_EXTRA="$WB_SETTINGS"
 
-exec ashlrcode "$@"
+# Session log (cross-agent trace).
+# shellcheck source=lib/session-log.sh
+. "$(dirname "$0")/lib/session-log.sh"
+log_session_start ashlrcode "$PWD"
+trap 'log_session_end ashlrcode "$PWD"' EXIT
+
+# Run (don't exec) so the EXIT trap fires and writes session_end.
+ashlrcode "$@"
+exit $?

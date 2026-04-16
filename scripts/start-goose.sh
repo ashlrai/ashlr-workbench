@@ -65,6 +65,12 @@ runtime_cfg="$runtime_cfg_dir/config.yaml"
 : "${ASHLR_PLUGIN_ROOT:=$HOME/Desktop/ashlr-plugin}"
 : "${GOOSE_WORKSPACE:=$HOME/Desktop}"
 
+# ─── Session log (cross-agent trace) ──────────────────────────────────────────
+# shellcheck source=lib/session-log.sh
+. "$script_dir/lib/session-log.sh"
+log_session_start goose "$GOOSE_WORKSPACE"
+trap 'log_session_end goose "$GOOSE_WORKSPACE"' EXIT
+
 # ─── Sanity checks ────────────────────────────────────────────────────────────
 if ! command -v goose >/dev/null 2>&1; then
   echo "Error: goose is not installed. Run ./scripts/install-goose.sh first." >&2
@@ -119,4 +125,8 @@ echo "  plugin:    $ASHLR_PLUGIN_ROOT"
 echo ""
 
 cd "$GOOSE_WORKSPACE"
-exec goose session "${passthrough_args[@]}"
+# Run (don't `exec`) so the EXIT trap fires after goose returns. `exec` would
+# replace this shell and skip the session_end log. The '${args+"${args[@]}"}'
+# form is bash 3.2-safe for an empty array under `set -u`.
+goose session ${passthrough_args+"${passthrough_args[@]}"}
+exit $?
