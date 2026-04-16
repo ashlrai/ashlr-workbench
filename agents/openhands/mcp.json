@@ -1,0 +1,45 @@
+{
+  "_comment": "ashlr-plugin MCP servers wired into OpenHands 1.6. Each entry runs a Bun-interpreted TypeScript MCP server over stdio. We mount the plugin read-only at /host/ashlr-plugin and a Linux-aarch64 bun binary at /host/bun (staged by scripts/start-openhands.sh since the host's bun is macOS-native). Tradeoff: inside-container stdio avoids TCP plumbing but requires the bun binary and plugin dir to be staged on the host — if the plugin is not at ~/Desktop/ashlr-plugin, edit start-openhands.sh. Plugin ships 10 MCP servers (not 12 as originally scoped).",
+  "mcpServers": {
+    "ashlr-efficiency": {
+      "command": "bash",
+      "args": ["-c", "cd /host/ashlr-plugin && exec /host/bun/bun run servers/efficiency-server.ts"]
+    },
+    "ashlr-sql": {
+      "command": "bash",
+      "args": ["-c", "cd /host/ashlr-plugin && exec /host/bun/bun run servers/sql-server.ts"]
+    },
+    "ashlr-bash": {
+      "command": "bash",
+      "args": ["-c", "cd /host/ashlr-plugin && exec /host/bun/bun run servers/bash-server.ts"]
+    },
+    "ashlr-tree": {
+      "command": "bash",
+      "args": ["-c", "cd /host/ashlr-plugin && exec /host/bun/bun run servers/tree-server.ts"]
+    },
+    "ashlr-http": {
+      "command": "bash",
+      "args": ["-c", "cd /host/ashlr-plugin && exec /host/bun/bun run servers/http-server.ts"]
+    },
+    "ashlr-diff": {
+      "command": "bash",
+      "args": ["-c", "cd /host/ashlr-plugin && exec /host/bun/bun run servers/diff-server.ts"]
+    },
+    "ashlr-logs": {
+      "command": "bash",
+      "args": ["-c", "cd /host/ashlr-plugin && exec /host/bun/bun run servers/logs-server.ts"]
+    },
+    "ashlr-genome": {
+      "command": "bash",
+      "args": ["-c", "cd /host/ashlr-plugin && exec /host/bun/bun run servers/genome-server.ts"]
+    },
+    "ashlr-orient": {
+      "command": "bash",
+      "args": ["-c", "cd /host/ashlr-plugin && exec /host/bun/bun run servers/orient-server.ts"]
+    },
+    "ashlr-github": {
+      "command": "bash",
+      "args": ["-c", "cd /host/ashlr-plugin && exec /host/bun/bun run servers/github-server.ts"]
+    }
+  }
+}

@@ -1,0 +1,78 @@
+# OpenHands 1.6.0 config.toml
+#
+# IMPORTANT: OpenHands V1 (1.x) primarily reads configuration from environment
+# variables and the Settings UI — the legacy V0 config.toml is deprecated but
+# still honored for many keys. The authoritative source of runtime settings in
+# start-openhands.sh is the env vars passed to `docker run`. This file exists
+# to:
+#   (a) make settings visible in source control,
+#   (b) cover any key that still only flows through TOML,
+#   (c) serve as a starting point if you switch back to V0 or to the CLI
+#       mode which still prefers TOML.
+#
+# Docs:
+#   https://docs.openhands.dev/openhands/usage/run-openhands/local-setup
+#   https://docs.openhands.dev/openhands/usage/llms/local-llms
+#   https://docs.openhands.dev/overview/model-context-protocol
+#
+# When start-openhands.sh runs, this file is mounted read-only at
+# /.openhands/config.toml inside the container.
+
+[core]
+workspace_base = "/workspace"
+# V1 uses /.openhands for persistence; state_dir below mirrors that.
+file_store = "local"
+file_store_path = "/.openhands"
+max_iterations = 100
+# Security: run_as_openhands drops root inside the agent sandbox.
+run_as_openhands = true
+# Telemetry off — we're fully local.
+disable_color = false
+
+[llm]
+# LM Studio serves an OpenAI-compatible endpoint. LiteLLM requires the
+# `openai/` prefix so it routes as a generic OpenAI call.
+model = "openai/qwen/qwen3-coder-30b"
+base_url = "http://host.docker.internal:1234/v1"
+# LM Studio ignores the key value — any non-empty string works.
+api_key = "local-llm"
+# Qwen3-Coder-30B supports long context; 32k is a safe working window.
+max_input_tokens = 32768
+max_output_tokens = 4096
+temperature = 0.0
+# Some OpenHands builds check these; harmless if the key is ignored.
+custom_llm_provider = "openai"
+# TODO: If OpenHands 1.6 renames/ignores any of these keys, the env vars
+# in start-openhands.sh (LLM_MODEL, LLM_BASE_URL, LLM_API_KEY) take
+# precedence and will keep things working.
+
+[sandbox]
+# V1 "docker" runtime uses an agent-server image. These mirror the env vars
+# AGENT_SERVER_IMAGE_REPOSITORY / AGENT_SERVER_IMAGE_TAG set in
+# start-openhands.sh. Pinned so this file is self-documenting.
+runtime_container_image = "ghcr.io/openhands/agent-server:1.15.0-python"
+# Host workspace bind. SANDBOX_VOLUMES env var is the V1 way; this is kept
+# for legacy compatibility.
+volumes = "~/Desktop:/workspace:rw"
+user_id = 501
+# Reasonable defaults for a dev laptop. Raise timeout if running long tests.
+timeout = 120
+use_host_network = false
+# TODO: Confirm the exact TOML key name for the new agent-server image in
+# 1.6 changelogs. Env-var path (AGENT_SERVER_IMAGE_*) is known-good.
+
+[agent]
+# Primary coding agent in V1. If you switch to a thinking model, try
+# "CodeActAgent" or the SDK-native agents from docs.openhands.dev/sdk.
+name = "CodeActAgent"
+enable_prompt_extensions = true
+enable_history_truncation = true
+enable_mcp = true
+# MCP config lives in /.openhands/mcp.json (mounted by start-openhands.sh).
+mcp_config_path = "/.openhands/mcp.json"
+
+[security]
+# Keep security analyzer off for local dev. Turn on if you plan to let the
+# agent touch production systems.
+confirmation_mode = false
+security_analyzer = ""
