@@ -186,6 +186,26 @@ docker stop <name> && docker rm <name>
 
 ## Known gaps / follow-ups
 
+- **MCP config schema (FIXED 2026-04-16)**: the original `mcp.json` used the
+  generic Claude Code `mcpServers` dict format. OpenHands 1.6 requires the
+  `MCPConfig` pydantic schema: `{stdio_servers:[{name,command,args}], ...}`.
+  The settings endpoint returned 500 and the agent could not see MCP tools.
+  Fixed by rewriting `mcp.json` to match the OpenHands-native schema and
+  updating the `settings.json` splice in `start-openhands.sh`.
+- **Sandbox runtime image (FIXED 2026-04-16)**: OpenHands 1.6 DockerRuntime
+  tries to build a custom sandbox image via `apt-get update` inside docker
+  build, which fails on Docker Desktop due to DNS/network issues during build.
+  Fixed by pre-pulling the matching runtime image and passing
+  `SANDBOX_RUNTIME_CONTAINER_IMAGE` so OpenHands skips the build step.
+- **SANDBOX_VOLUMES for MCP mounts**: MCP stdio servers run inside the sandbox
+  container (not the main OpenHands container). The `/host/ashlr-plugin` and
+  `/host/bun` directories must be mounted into the sandbox via
+  `SANDBOX_VOLUMES`, not just the main container's `-v` flags.
+- **Jupyter init timeout**: The sandbox's `ActionExecutor.ainit()` initializes
+  a Jupyter kernel, which can timeout on Docker Desktop (especially under
+  memory pressure or slow disk). If conversations get stuck at STARTING, check
+  `docker logs openhands-runtime-<cid>` for `HTTPTimeoutError`. Increasing
+  `INIT_PLUGIN_TIMEOUT` (passed as env to sandbox) to 300s may help.
 - **12 vs 10 servers**: the brief mentioned 12, plugin ships 10
   (efficiency, sql, bash, tree, http, diff, logs, genome, orient, github).
   Reconcile with the ashlr-plugin roadmap before adding placeholders.

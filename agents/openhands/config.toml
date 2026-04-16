@@ -47,10 +47,12 @@ custom_llm_provider = "openai"
 # precedence and will keep things working.
 
 [sandbox]
-# V1 "docker" runtime uses an agent-server image. These mirror the env vars
-# AGENT_SERVER_IMAGE_REPOSITORY / AGENT_SERVER_IMAGE_TAG set in
-# start-openhands.sh. Pinned so this file is self-documenting.
-runtime_container_image = "ghcr.io/openhands/agent-server:1.15.0-python"
+# V1 DockerRuntime builds a custom sandbox image from a base image. To skip
+# the build (which fails on Docker Desktop due to DNS issues during
+# apt-get), start-openhands.sh pre-pulls the published runtime image and
+# sets SANDBOX_RUNTIME_CONTAINER_IMAGE. The tag below documents which image
+# the env var points to. Update when bumping the OpenHands version.
+runtime_container_image = "ghcr.io/openhands/runtime:oh_v1.6.0_93pv7lc0x29cbiqa_3j4mdepm5f3d15vq"
 # Host workspace bind. SANDBOX_VOLUMES env var is the V1 way; this is kept
 # for legacy compatibility.
 volumes = "~/Desktop:/workspace:rw"

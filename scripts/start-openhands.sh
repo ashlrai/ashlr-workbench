@@ -36,6 +36,12 @@ LLM_MODEL="openai/qwen/qwen3-coder-30b"    # LiteLLM format; matches LM Studio i
 LLM_API_KEY="local-llm"                     # LM Studio ignores the value
 CONTEXT_LENGTH="32768"
 PORT="3000"
+# Pre-built sandbox runtime image. Setting this skips the apt-get-based
+# image build that OpenHands otherwise kicks off on first conversation
+# (which fails inside Docker Desktop due to build-network DNS issues).
+# Must match the oh_v<version>_<hash> tag OpenHands computes for this
+# release. Update when bumping IMAGE above.
+SANDBOX_RUNTIME_IMAGE="ghcr.io/openhands/runtime:oh_v1.6.0_93pv7lc0x29cbiqa_3j4mdepm5f3d15vq"
 
 STATE_DIR="$HOME/.openhands"
 WORKSPACE_HOST="$HOME/Desktop"
@@ -208,8 +214,8 @@ docker run -d \
   -e LLM_MODEL="$LLM_MODEL" \
   -e LLM_API_KEY="$LLM_API_KEY" \
   -e OLLAMA_CONTEXT_LENGTH="$CONTEXT_LENGTH" \
-  -e AGENT_SERVER_IMAGE_REPOSITORY="ghcr.io/openhands/agent-server" \
-  -e AGENT_SERVER_IMAGE_TAG="1.15.0-python" \
+  -e SANDBOX_RUNTIME_CONTAINER_IMAGE="$SANDBOX_RUNTIME_IMAGE" \
+  -e INIT_PLUGIN_TIMEOUT=300 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$STATE_DIR:/.openhands" \
   -v "$WORKSPACE_HOST:/workspace:rw" \
