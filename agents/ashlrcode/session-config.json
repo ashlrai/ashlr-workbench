@@ -1,0 +1,40 @@
+{
+  "_comment": "Session-specific ashlrcode overlay. Used by scripts/aw-session.sh for interactive 'aw' sessions. Model/provider are set via env vars (AC_MODEL, OPENAI_BASE_URL, etc.) so this file handles MCP, permissions, and approve modes only.",
+  "approveMode": "auto",
+  "autoAcceptEdits": true,
+  "dangerouslySkipPermissions": false,
+  "hooks": {
+    "preToolUse": [
+      { "toolName": "Bash", "inputPattern": "rm -rf",      "action": "deny",  "message": "Refusing rm -rf — destructive command blocked" },
+      { "toolName": "Read", "inputPattern": "\\.env",      "action": "deny",  "message": "Reading .env files is not allowed" },
+      { "toolName": "Bash", "inputPattern": "git push",    "action": "ask",   "message": "Confirm before pushing to remote" },
+      { "toolName": "Bash", "inputPattern": "npm publish", "action": "ask",   "message": "Confirm before publishing to npm" },
+      { "toolName": "Bash", "inputPattern": "docker rm",   "action": "ask",   "message": "Confirm before removing containers" },
+      { "toolName": "Bash", "inputPattern": "git reset --hard", "action": "ask", "message": "Confirm destructive git reset" },
+      { "toolName": "Bash", "inputPattern": "npm run test:", "action": "allow" },
+      { "toolName": "Bash", "inputPattern": "bun run build:", "action": "allow" },
+      { "toolName": "Bash", "inputPattern": "git diff",    "action": "allow" },
+      { "toolName": "Bash", "inputPattern": "git status",  "action": "allow" },
+      { "toolName": "Bash", "inputPattern": "git log",     "action": "allow" },
+      { "toolName": "Bash", "inputPattern": "curl",        "action": "allow" }
+    ],
+    "postToolUse": [],
+    "sessionStart": []
+  },
+  "permissionRules": [
+    { "tool": "Read(*)",               "action": "allow" },
+    { "tool": "Glob(*)",               "action": "allow" },
+    { "tool": "Grep(*)",               "action": "allow" },
+    { "tool": "LS(*)",                 "action": "allow" },
+    { "tool": "Agent(*)",              "action": "allow" },
+    { "tool": "Bash(npm run test:*)",  "action": "allow" },
+    { "tool": "Bash(bun run build:*)", "action": "allow" },
+    { "tool": "Bash(bun test:*)",      "action": "allow" },
+    { "tool": "Bash(git diff:*)",      "action": "allow" },
+    { "tool": "Bash(git status:*)",    "action": "allow" },
+    { "tool": "Bash(git log:*)",       "action": "allow" },
+    { "tool": "Bash(curl:*)",          "action": "allow" },
+    { "tool": "Read(.env*)",           "action": "deny"  },
+    { "tool": "Bash(rm -rf:*)",        "action": "deny"  }
+  ]
+}

@@ -6,6 +6,9 @@
 # Docker, ashlr-plugin, MCP servers).
 #
 # Subcommands:
+#   (no args)       start interactive ashlrcode session (like 'claude')
+#   "prompt"        one-shot ashlrcode with the given prompt
+#   --model <alias> choose model: qwen (default), fast, claude
 #   start <agent>   start one agent or "all"
 #   stop <agent>    stop one agent (only OpenHands really needs it)
 #   status          combined health snapshot
@@ -384,7 +387,19 @@ cmd_help() {
 ${C_BOLD}aw${C_RESET} — ashlr-workbench unified CLI
 
 ${C_BOLD}USAGE${C_RESET}
-  aw <command> [args]
+  aw                          interactive ashlrcode session (like 'claude')
+  aw "fix the bug"            one-shot prompt
+  aw --model fast "task"      use a specific model
+  aw <command> [args]         run a subcommand
+
+${C_BOLD}INTERACTIVE MODE${C_RESET}
+  When invoked with no subcommand, aw starts an interactive ashlrcode session
+  on your local LLM. Pass a quoted string for one-shot mode.
+
+  ${C_CYAN}--model${C_RESET} <alias>   choose model:
+                     ${C_GREEN}qwen${C_RESET}   Qwen3-Coder-30B via LM Studio (default)
+                     ${C_GREEN}fast${C_RESET}   llama3.2:3b via Ollama (speed)
+                     ${C_GREEN}claude${C_RESET} Claude via Anthropic API (requires ANTHROPIC_API_KEY)
 
 ${C_BOLD}COMMANDS${C_RESET}
   ${C_CYAN}start${C_RESET} <agent>   start one agent (openhands|goose|aider|ashlrcode|all)
@@ -398,26 +413,66 @@ ${C_BOLD}COMMANDS${C_RESET}
   ${C_CYAN}help${C_RESET}            show this message
 
 ${C_BOLD}EXAMPLES${C_RESET}
-  aw start openhands       # launch the Docker daemon
-  aw start aider           # interactive Aider session in cwd
-  aw start goose -- --debug
-  aw status                # quick snapshot
-  aw health                # full 13-point check
-  aw doctor                # actionable diagnosis
+  aw                         # interactive coding session
+  aw "fix the login bug"     # one-shot prompt on Qwen3-Coder
+  aw --model fast "2+2"      # quick task on llama3.2:3b
+  aw --model claude "hard"   # use Claude API for complex work
+  aw start openhands         # launch the Docker daemon
+  aw status                  # quick snapshot
+  aw doctor                  # actionable diagnosis
 
 ${C_BOLD}ENVIRONMENT${C_RESET}
-  LM_STUDIO_URL    default: http://localhost:1234/v1
-  OLLAMA_URL       default: http://localhost:11434
-  ASHLR_PLUGIN_DIR default: ~/Desktop/ashlr-plugin
-  NO_COLOR         disables ANSI colors
+  LM_STUDIO_URL      default: http://localhost:1234/v1
+  OLLAMA_URL         default: http://localhost:11434
+  ASHLR_PLUGIN_DIR   default: ~/Desktop/ashlr-plugin
+  ANTHROPIC_API_KEY  required for --model claude
+  NO_COLOR           disables ANSI colors
 
 ${C_BOLD}INSTALL ON PATH${C_RESET}
   ln -sf $WORKBENCH/bin/aw /usr/local/bin/aw
 EOF
 }
 
+# ─── Interactive mode detection ───────────────────────────────────────────────
+# Known subcommands that are NOT interactive-mode triggers.
+KNOWN_SUBCOMMANDS="start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|help"
+
+is_known_subcommand() {
+  case "$1" in
+    start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|help) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# If no args at all → interactive session
+if [ $# -eq 0 ]; then
+  exec "$SCRIPTS_DIR/aw-session.sh"
+fi
+
+# Peek at $1: if it's --model, --help/-h, or a quoted string (not a known
+# subcommand and not a flag), route to interactive/session mode.
+cmd="${1:-}"
+
+# --help / -h always shows help
+case "$cmd" in
+  -h|--help)
+    cmd_help
+    exit 0
+    ;;
+esac
+
+# --model as first arg → interactive session with model override
+if [ "$cmd" = "--model" ]; then
+  exec "$SCRIPTS_DIR/aw-session.sh" "$@"
+fi
+
+# If $1 is not a known subcommand and does not start with --, treat it as a
+# prompt for interactive mode (e.g. `aw "fix the bug"`).
+if ! is_known_subcommand "$cmd" && [ "${cmd#--}" = "$cmd" ]; then
+  exec "$SCRIPTS_DIR/aw-session.sh" "$@"
+fi
+
 # ─── Dispatch ─────────────────────────────────────────────────────────────────
-cmd="${1:-help}"
 shift || true
 
 case "$cmd" in
@@ -429,7 +484,7 @@ case "$cmd" in
   doctor|diagnose)    cmd_doctor "$@" ;;
   log)                exec "$BIN_DIR/aw-log" "$@" ;;
   mode)               exec "$SCRIPTS_DIR/mode-switch.sh" "$@" ;;
-  help|-h|--help)     cmd_help        ;;
+  help)               cmd_help        ;;
   *)
     bad "unknown command: $cmd"
     echo
