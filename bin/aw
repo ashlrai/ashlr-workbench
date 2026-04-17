@@ -411,6 +411,7 @@ ${C_BOLD}COMMANDS${C_RESET}
   ${C_CYAN}log${C_RESET} <subcmd>     view the cross-agent session log (tail/recent/stats/filter/rotate)
   ${C_CYAN}mode${C_RESET} <mode>     switch model loading (coding/trading/both/lean/status)
   ${C_CYAN}layout${C_RESET} <name>   open a multi-pane workspace (workbench/feature/parallel/research)
+  ${C_CYAN}auto${C_RESET} "goal"      autonomous builder — scaffolds and builds a project from a prompt
   ${C_CYAN}resume${C_RESET}          resume where you left off (restores last session context)
   ${C_CYAN}summary${C_RESET}         summarize the most recent session
   ${C_CYAN}help${C_RESET}            show this message
@@ -442,7 +443,7 @@ KNOWN_SUBCOMMANDS="start|stop|status|st|health|healthcheck|update|upgrade|doctor
 
 is_known_subcommand() {
   case "$1" in
-    start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|resume|summary|help) return 0 ;;
+    start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|resume|summary|auto|help) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -504,6 +505,7 @@ case "$cmd" in
       *) bad "unknown layout: $layout_name" ;;
     esac
     ;;
+  auto)               exec "$SCRIPTS_DIR/aw-auto.sh" "$@" ;;
   mode)               exec "$SCRIPTS_DIR/mode-switch.sh" "$@" ;;
   resume)             exec "$SCRIPTS_DIR/session-resume.sh" "$@" ;;
   summary)            exec "$SCRIPTS_DIR/session-summary.sh" "$@" ;;
