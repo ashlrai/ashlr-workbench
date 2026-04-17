@@ -394,6 +394,7 @@ ${C_BOLD}COMMANDS${C_RESET}
   ${C_CYAN}update${C_RESET}          update agents + plugin (delegates to scripts/update-all.sh)
   ${C_CYAN}doctor${C_RESET}          diagnose common issues + suggest fixes
   ${C_CYAN}log${C_RESET} <subcmd>     view the cross-agent session log (tail/recent/stats/filter/rotate)
+  ${C_CYAN}mode${C_RESET} <mode>     switch model loading (coding/trading/both/lean/status)
   ${C_CYAN}help${C_RESET}            show this message
 
 ${C_BOLD}EXAMPLES${C_RESET}
@@ -427,6 +428,7 @@ case "$cmd" in
   update|upgrade)     cmd_update "$@" ;;
   doctor|diagnose)    cmd_doctor "$@" ;;
   log)                exec "$BIN_DIR/aw-log" "$@" ;;
+  mode)               exec "$SCRIPTS_DIR/mode-switch.sh" "$@" ;;
   help|-h|--help)     cmd_help        ;;
   *)
     bad "unknown command: $cmd"
