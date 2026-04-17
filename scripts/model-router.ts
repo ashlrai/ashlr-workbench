@@ -2,17 +2,20 @@
 /**
  * model-router.ts — Rule-based prompt complexity classifier
  *
- * Routes prompts to the cheapest model that can handle them:
- *   fast   → llama3.2:3b   (simple, short, informational)
- *   qwen   → Qwen3-Coder-30B (code gen, multi-file, moderate)
- *   claude → Claude API    (hard reasoning, architecture, multi-step)
+ * Routes prompts to the best LOCAL model for the task:
+ *   fast   → llama3.2:3b      (simple, short, informational — 2GB, instant)
+ *   qwen   → Qwen3-Coder-30B  (code generation, refactoring, standard dev tasks)
+ *   gemma  → gemma4:26b       (hard reasoning, architecture, design — already loaded 24/7 for trading bots)
+ *
+ * Fully local, fully free. No cloud API calls.
+ * gemma4 is always in RAM (Kalshi trading bots keep it warm) so routing to it costs 0 extra RAM.
  *
  * Usage:
  *   echo "what's my git status" | bun run scripts/model-router.ts
  *   # → fast
  */
 
-export type ModelTier = "fast" | "qwen" | "claude";
+export type ModelTier = "fast" | "qwen" | "gemma";
 
 // ---------------------------------------------------------------------------
 // Keyword sets
@@ -172,24 +175,23 @@ export function classifyPrompt(prompt: string): ModelTier {
   const hasCodeGenKeyword = CODE_GEN_KEYWORDS.some((kw) => lower.includes(kw));
   const hasFastKeyword = FAST_KEYWORDS.some((kw) => lower.includes(kw));
 
-  // --- Claude tier ---
-  // Complexity keywords or multi-file patterns are strong signals
+  // --- Gemma tier (hard reasoning) ---
+  // gemma4:26b is always loaded (Kalshi trading bots keep it warm 24/7).
+  // Route architecture, design, security, and multi-file reasoning here — 0 extra RAM.
   if (hasComplexityKeyword || hasMultiFileSignal) {
-    // But only if the prompt isn't trivially short with a weak signal
-    // e.g. "review this" alone is borderline — if it's short + no other signal, demote to qwen
     if (wordCount < 10 && !hasMultiFileSignal && !hasCodeGenKeyword) {
-      // Short prompt with a single complexity keyword like "review" — treat as qwen
+      // Short prompt with a single complexity keyword like "review" — qwen can handle it
       return "qwen";
     }
-    return "claude";
+    return "gemma";
   }
 
-  // Very long prompts (200+ words) that also have code-gen signals → claude
+  // Very long prompts with code-gen signals → gemma (needs deeper reasoning)
   if (wordCount > 200 && hasCodeGenKeyword) {
-    return "claude";
+    return "gemma";
   }
 
-  // --- Qwen tier ---
+  // --- Qwen tier (code generation) ---
   if (hasCodeGenKeyword) {
     return "qwen";
   }

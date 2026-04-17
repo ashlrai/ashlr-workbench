@@ -8,11 +8,10 @@
 # Usage:
 #   ./scripts/aw-session.sh                          # interactive (default: qwen)
 #   ./scripts/aw-session.sh --model fast "2+2"       # one-shot with llama3.2:3b
-#   ./scripts/aw-session.sh --model claude "hard"     # one-shot via Anthropic API
+#   ./scripts/aw-session.sh --model gemma "design"    # one-shot via gemma4:26b (hard reasoning)
 #
 # Environment:
-#   AW_MODEL          model alias (qwen|fast|claude|auto) — overridden by --model
-#   ANTHROPIC_API_KEY required when --model claude
+#   AW_MODEL          model alias (qwen|fast|gemma|auto) — overridden by --model
 
 set -uo pipefail
 
@@ -90,19 +89,15 @@ case "$MODEL_ALIAS" in
     PROVIDER="ollama"
     API_KEY=""
     ;;
-  claude)
-    DISPLAY_MODEL="Claude (Anthropic API)"
-    ENDPOINT_URL="https://api.anthropic.com"
-    MODEL_ID="claude-sonnet-4-6-20250514"
-    PROVIDER="anthropic"
-    API_KEY="${ANTHROPIC_API_KEY:-}"
-    if [ -z "$API_KEY" ]; then
-      bad "ANTHROPIC_API_KEY is required for --model claude"
-      exit 1
-    fi
+  gemma)
+    DISPLAY_MODEL="gemma4:26b (reasoning)"
+    ENDPOINT_URL="$OLLAMA_URL"
+    MODEL_ID="gemma4:26b"
+    PROVIDER="ollama"
+    API_KEY=""
     ;;
   *)
-    bad "unknown model alias: $MODEL_ALIAS (valid: qwen, fast, claude, auto)"
+    bad "unknown model alias: $MODEL_ALIAS (valid: qwen, fast, gemma, auto)"
     exit 2
     ;;
 esac

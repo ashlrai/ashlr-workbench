@@ -59,14 +59,14 @@ assert_route "qwen" "create a new React component for the dashboard sidebar"
 assert_route "qwen" "update the database schema to add a created_at column"
 assert_route "qwen" ""
 
-# ── Claude tier ────────────────────────────────────────────
+# ── Gemma tier (hard reasoning) ───────────────────────────
 echo ""
-printf "${BOLD}Claude tier (Claude API)${RESET}\n"
-assert_route "claude" "design a migration strategy from MongoDB to PostgreSQL across all 15 microservices"
-assert_route "claude" "review this PR for security vulnerabilities and explain the tradeoffs of each finding"
-assert_route "claude" "design a distributed system for handling 10M events/sec with exactly-once semantics"
-assert_route "claude" "architect a microservice mesh with circuit breakers and graceful degradation"
-assert_route "claude" "explain why the current auth implementation has race conditions and design a fix that handles all edge cases across 8 files"
+printf "${BOLD}Gemma tier (gemma4:26b — always loaded for trading bots)${RESET}\n"
+assert_route "gemma" "design a migration strategy from MongoDB to PostgreSQL across all 15 microservices"
+assert_route "gemma" "review this PR for security vulnerabilities and explain the tradeoffs of each finding"
+assert_route "gemma" "design a distributed system for handling 10M events/sec with exactly-once semantics"
+assert_route "gemma" "architect a microservice mesh with circuit breakers and graceful degradation"
+assert_route "gemma" "explain why the current auth implementation has race conditions and design a fix that handles all edge cases across 8 files"
 
 # ── Summary ────────────────────────────────────────────────
 echo ""

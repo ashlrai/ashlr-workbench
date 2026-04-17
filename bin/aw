@@ -8,7 +8,7 @@
 # Subcommands:
 #   (no args)       start interactive ashlrcode session (like 'claude')
 #   "prompt"        one-shot ashlrcode with the given prompt
-#   --model <alias> choose model: qwen (default), fast, claude
+#   --model <alias> choose model: qwen (default), fast, gemma
 #   start <agent>   start one agent or "all"
 #   stop <agent>    stop one agent (only OpenHands really needs it)
 #   status          combined health snapshot
@@ -399,7 +399,7 @@ ${C_BOLD}INTERACTIVE MODE${C_RESET}
   ${C_CYAN}--model${C_RESET} <alias>   choose model:
                      ${C_GREEN}qwen${C_RESET}   Qwen3-Coder-30B via LM Studio (default)
                      ${C_GREEN}fast${C_RESET}   llama3.2:3b via Ollama (speed)
-                     ${C_GREEN}claude${C_RESET} Claude via Anthropic API (requires ANTHROPIC_API_KEY)
+                     ${C_GREEN}gemma${C_RESET}  gemma4:26b via Ollama (hard reasoning — always loaded for trading bots)
 
 ${C_BOLD}COMMANDS${C_RESET}
   ${C_CYAN}start${C_RESET} <agent>   start one agent (openhands|goose|aider|ashlrcode|all)
