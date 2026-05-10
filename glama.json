@@ -1,0 +1,6 @@
+{
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "name": "ashlr-workbench",
+  "description": "Local agent workbench bundling OpenHands, Goose, Aider, and ashlrcode with ashlr-plugin MCP servers pre-wired.",
+  "maintainers": ["masonwyatt23"]
+}
