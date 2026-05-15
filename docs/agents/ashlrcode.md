@@ -87,7 +87,7 @@ Trimmed shape of `agents/ashlrcode/settings.json`:
     "primary": {
       "provider": "xai",
       "apiKeyEnvVar": "XAI_API_KEY",
-      "model": "grok-4-1-fast-reasoning",
+      "model": "grok-4.3",
       "baseURL": "https://api.x.ai/v1"
     },
     "fallbacks": [
@@ -218,7 +218,7 @@ aw start ashlrcode
 
 ```
 > /model
-primary: xai  (grok-4-1-fast-reasoning)
+primary: xai  (grok-4.3)
 fallbacks:
   - lmstudio-local  (qwen/qwen3-coder-30b)
 

@@ -12,7 +12,7 @@ ashlrcode is the workbench's **MCP-rich, multi-provider agent**:
 
 - **You own it.** It's Mason's published CLI, so the workbench eats its own
   dog food.
-- **Multi-provider.** Primary = xAI Grok (`grok-4-1-fast-reasoning`). Fallback
+- **Multi-provider.** Primary = xAI Grok (`grok-4.3`). Fallback
   = local LM Studio running `qwen/qwen3-coder-30b` for when you want
   on-device inference or the network is unavailable.
 - **MCP-native.** All 10 `ashlr-plugin` MCP servers plus `supabase` and
@@ -30,7 +30,7 @@ ashlrcode is the workbench's **MCP-rich, multi-provider agent**:
 
 The overlay layers on top of user defaults:
 
-- **Providers.** Primary remains xAI Grok (`grok-4-1-fast-reasoning`). A new
+- **Providers.** Primary remains xAI Grok (`grok-4.3`). A new
   `fallbacks[0]` entry adds LM Studio (`http://localhost:1234/v1` with
   `qwen/qwen3-coder-30b`) so you can `/model` swap to local.
 - **Hooks.** Same safety hooks as the user's global config —

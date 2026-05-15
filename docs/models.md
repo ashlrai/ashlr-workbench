@@ -160,7 +160,7 @@ OLLAMA_BASE=http://localhost:11434/v1 \
 
 **Strengths.**
 
-- Fast. Grok's `grok-4-1-fast-reasoning` is noticeably quicker than Claude
+- Fast. Grok's `grok-4.3` is noticeably quicker than Claude
   for short turns.
 - Good general reasoning — between Qwen-30B and Claude Sonnet on most
   everyday tasks.
