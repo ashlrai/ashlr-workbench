@@ -1,0 +1,250 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$comment": "JSON-Schema definitions for MCP JSON-RPC 2.0 protocol compliance validation. Used by tests/mcp-protocol-validator.sh to verify initialize and tools/list response shapes.",
+
+  "definitions": {
+
+    "jsonrpc_version": {
+      "type": "string",
+      "const": "2.0",
+      "description": "JSON-RPC version field — must be exactly '2.0'"
+    },
+
+    "request_id": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" },
+        { "type": "null" }
+      ],
+      "description": "JSON-RPC id field — string, integer, or null"
+    },
+
+    "jsonrpc_error_object": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code":    { "type": "integer", "description": "Integer error code" },
+        "message": { "type": "string",  "description": "Human-readable error description" },
+        "data":    { "description": "Optional additional error data (any type)" }
+      },
+      "additionalProperties": false
+    },
+
+    "jsonrpc_response": {
+      "type": "object",
+      "required": ["jsonrpc", "id"],
+      "properties": {
+        "jsonrpc": { "$ref": "#/definitions/jsonrpc_version" },
+        "id":      { "$ref": "#/definitions/request_id" },
+        "result":  { "description": "Present on success" },
+        "error":   { "$ref": "#/definitions/jsonrpc_error_object" }
+      },
+      "oneOf": [
+        { "required": ["result"], "not": { "required": ["error"] } },
+        { "required": ["error"],  "not": { "required": ["result"] } }
+      ],
+      "additionalProperties": false
+    },
+
+    "initialize_result": {
+      "type": "object",
+      "required": ["jsonrpc", "id", "result"],
+      "properties": {
+        "jsonrpc": { "$ref": "#/definitions/jsonrpc_version" },
+        "id":      { "$ref": "#/definitions/request_id" },
+        "result": {
+          "type": "object",
+          "required": ["protocolVersion", "capabilities", "serverInfo"],
+          "properties": {
+            "protocolVersion": {
+              "type": "string",
+              "description": "MCP protocol version string, e.g. '2024-11-05'"
+            },
+            "capabilities": {
+              "type": "object",
+              "description": "Server capability advertisement object",
+              "properties": {
+                "tools":     { "type": "object" },
+                "resources": { "type": "object" },
+                "prompts":   { "type": "object" },
+                "logging":   { "type": "object" }
+              }
+            },
+            "serverInfo": {
+              "type": "object",
+              "required": ["name"],
+              "properties": {
+                "name":    { "type": "string" },
+                "version": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "tool_definition": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool name — must be non-empty"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what the tool does"
+        },
+        "inputSchema": {
+          "type": "object",
+          "description": "JSON Schema for the tool's input parameters",
+          "properties": {
+            "type":       { "type": "string", "const": "object" },
+            "properties": { "type": "object" },
+            "required":   { "type": "array",  "items": { "type": "string" } }
+          }
+        }
+      }
+    },
+
+    "tools_list_result": {
+      "type": "object",
+      "required": ["jsonrpc", "id", "result"],
+      "properties": {
+        "jsonrpc": { "$ref": "#/definitions/jsonrpc_version" },
+        "id":      { "$ref": "#/definitions/request_id" },
+        "result": {
+          "type": "object",
+          "required": ["tools"],
+          "properties": {
+            "tools": {
+              "type": "array",
+              "minItems": 1,
+              "description": "Each MCP server must advertise at least one tool",
+              "items": { "$ref": "#/definitions/tool_definition" }
+            },
+            "nextCursor": {
+              "type": "string",
+              "description": "Optional pagination cursor"
+            }
+          }
+        }
+      }
+    }
+
+  },
+
+  "type": "object",
+  "description": "Top-level schema document — individual response shapes are in definitions/",
+
+  "properties": {
+
+    "required_mcp_servers": {
+      "type": "array",
+      "description": "The 10 canonical ashlr-plugin MCP servers every agent config must declare",
+      "items": { "type": "string" },
+      "const": [
+        "ashlr-efficiency",
+        "ashlr-sql",
+        "ashlr-bash",
+        "ashlr-tree",
+        "ashlr-http",
+        "ashlr-diff",
+        "ashlr-logs",
+        "ashlr-genome",
+        "ashlr-orient",
+        "ashlr-github"
+      ]
+    },
+
+    "agent_command_lines": {
+      "type": "object",
+      "description": "Per-agent command-line invocation pattern for each MCP server",
+      "properties": {
+        "openhands": {
+          "type": "object",
+          "description": "OpenHands runs bun inside Docker via `bash -c 'cd /host/ashlr-plugin && exec /host/bun/bun run servers/<name>-server.ts'`",
+          "properties": {
+            "command": { "type": "string", "const": "bash" },
+            "args_pattern": { "type": "string", "const": "-c cd /host/ashlr-plugin && exec /host/bun/bun run servers/{short}-server.ts" }
+          }
+        },
+        "goose": {
+          "type": "object",
+          "description": "Goose uses `bash <plugin>/scripts/mcp-entrypoint.sh servers/<name>-server.ts`",
+          "properties": {
+            "command": { "type": "string", "const": "bash" },
+            "args_pattern": { "type": "string", "const": "${ASHLR_PLUGIN_ROOT}/scripts/mcp-entrypoint.sh servers/{short}-server.ts" }
+          }
+        },
+        "aider": {
+          "type": "object",
+          "description": "Aider does not declare MCP servers in its config file (uses CLI flags); config drift is not applicable",
+          "properties": {
+            "mcp_in_config": { "type": "boolean", "const": false }
+          }
+        },
+        "ashlrcode": {
+          "type": "object",
+          "description": "ashlrcode uses `bash <plugin>/scripts/mcp-entrypoint.sh servers/<name>-server.ts`",
+          "properties": {
+            "command": { "type": "string", "const": "bash" },
+            "args_pattern": { "type": "string", "const": "/Users/masonwyatt/Desktop/ashlr-plugin/scripts/mcp-entrypoint.sh servers/{short}-server.ts" }
+          }
+        }
+      }
+    },
+
+    "latency_thresholds_ms": {
+      "type": "object",
+      "description": "Maximum acceptable latencies for each protocol phase",
+      "properties": {
+        "initialize_response": {
+          "type": "integer",
+          "const": 5000,
+          "description": "Server must respond to initialize within 5 seconds"
+        },
+        "tools_list_response": {
+          "type": "integer",
+          "const": 5000,
+          "description": "Server must respond to tools/list within 5 seconds"
+        },
+        "shutdown_ack": {
+          "type": "integer",
+          "const": 3000,
+          "description": "Server must shut down cleanly within 3 seconds of receiving shutdown"
+        }
+      }
+    },
+
+    "compliance_score_thresholds": {
+      "type": "object",
+      "description": "Pass/warn/fail thresholds for the overall compliance score (percentage 0-100)",
+      "properties": {
+        "pass":  { "type": "integer", "const": 90 },
+        "warn":  { "type": "integer", "const": 70 },
+        "fail":  { "type": "integer", "const": 0  }
+      }
+    },
+
+    "jsonl_record_schema": {
+      "type": "object",
+      "description": "Shape of every JSONL record written to the output file",
+      "required": ["ts", "agent", "mcp", "phase", "status", "latency_ms"],
+      "properties": {
+        "ts":         { "type": "string",  "description": "ISO-8601 UTC timestamp" },
+        "agent":      { "type": "string",  "description": "Agent name: openhands|goose|aider|ashlrcode" },
+        "mcp":        { "type": "string",  "description": "MCP server name, e.g. ashlr-efficiency" },
+        "phase":      { "type": "string",  "enum": ["config-drift", "initialize", "tools-list", "shutdown", "schema-validate", "overall"],
+                        "description": "Protocol phase being recorded" },
+        "status":     { "type": "string",  "enum": ["pass", "fail", "skip", "warn"],
+                        "description": "Outcome of this phase" },
+        "latency_ms": { "type": "integer", "description": "Wall-clock latency in milliseconds; -1 if not measured" },
+        "detail":     { "type": "string",  "description": "Optional human-readable context" },
+        "response":   { "type": "string",  "description": "Optional raw response excerpt (first 200 chars)" }
+      }
+    }
+
+  }
+}

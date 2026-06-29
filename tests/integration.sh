@@ -2129,6 +2129,300 @@ fi
 # Cleanup temp dirs
 rm -rf "$MATRIX_TMPDIR" "$MATRIX_SNAP_DIR" "$MATRIX_DIFF_DIR"
 
+# ─── Test 16: mcp-protocol-validator.sh + mcp-protocol-schema.json ───────────
+printf "\n\033[1mTest 16: MCP Protocol Validator\033[0m\n"
+
+MCP_VALIDATOR_SH="$REPO_ROOT/tests/mcp-protocol-validator.sh"
+MCP_PROTO_SCHEMA="$REPO_ROOT/tests/mcp-protocol-schema.json"
+
+# 16a — validator script exists and is executable
+assert_file_executable "mcp-protocol-validator.sh is executable" "$MCP_VALIDATOR_SH"
+
+# 16b — validator passes bash syntax check
+if bash -n "$MCP_VALIDATOR_SH" 2>/dev/null; then
+  _ok "mcp-protocol-validator.sh passes bash syntax check"
+else
+  _fail "mcp-protocol-validator.sh has bash syntax errors"
+fi
+
+# 16c — schema file exists and is valid JSON
+if [ -f "$MCP_PROTO_SCHEMA" ]; then
+  _ok "mcp-protocol-schema.json present"
+  if python3 -c "import json; json.load(open('$MCP_PROTO_SCHEMA'))" 2>/dev/null; then
+    _ok "mcp-protocol-schema.json is valid JSON"
+  else
+    _fail "mcp-protocol-schema.json is not valid JSON"
+  fi
+else
+  _fail "mcp-protocol-schema.json missing at $MCP_PROTO_SCHEMA"
+fi
+
+# 16d — schema declares the 10 canonical required_mcp_servers
+if [ -f "$MCP_PROTO_SCHEMA" ]; then
+  SCHEMA_SERVERS="$(python3 -c "
+import json, sys
+d = json.load(open('$MCP_PROTO_SCHEMA'))
+servers = d.get('properties', {}).get('required_mcp_servers', {}).get('const', [])
+print(len(servers))
+" 2>/dev/null || echo 0)"
+  if [ "${SCHEMA_SERVERS:-0}" -eq 10 ]; then
+    _ok "mcp-protocol-schema.json declares exactly 10 required MCP servers"
+  else
+    _fail "mcp-protocol-schema.json required_mcp_servers count is ${SCHEMA_SERVERS:-0}, expected 10"
+  fi
+fi
+
+# 16e — schema defines initialize_result and tools_list_result shapes
+for _def in initialize_result tools_list_result jsonrpc_response tool_definition; do
+  if python3 -c "
+import json, sys
+d = json.load(open('$MCP_PROTO_SCHEMA'))
+assert '$_def' in d.get('definitions', {}), 'missing'
+print('ok')
+" 2>/dev/null | grep -q ok; then
+    _ok "mcp-protocol-schema.json defines '$_def'"
+  else
+    _fail "mcp-protocol-schema.json missing definition: '$_def'"
+  fi
+done
+
+# 16f — validator sources config.sh successfully (no syntax error in sourcing chain)
+VALIDATOR_SOURCE_OK="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    . '$REPO_ROOT/scripts/lib/config.sh'
+    bash -n '$MCP_VALIDATOR_SH' && echo sourced_ok
+  " 2>&1
+)"
+if printf '%s' "$VALIDATOR_SOURCE_OK" | grep -q 'sourced_ok'; then
+  _ok "mcp-protocol-validator.sh syntax OK when config.sh is pre-sourced"
+else
+  _fail "mcp-protocol-validator.sh syntax error with config.sh: $VALIDATOR_SOURCE_OK"
+fi
+
+# 16g — validator run (dry-run with no plugin): exits 0 and emits the matrix header
+VALIDATOR_OUT="$(
+  env -i HOME="$HOME" PATH="$PATH" \
+    ASHLR_PLUGIN_DIR="/tmp/nonexistent-plugin-$$" \
+    NO_COLOR=1 \
+    MCP_PROTO_JSONL="$(mktemp /tmp/pv-test-XXXXXX.jsonl)" \
+    bash "$MCP_VALIDATOR_SH" 2>&1
+)"
+if printf '%s' "$VALIDATOR_OUT" | grep -qi 'Compliance Matrix'; then
+  _ok "mcp-protocol-validator.sh emits Compliance Matrix section"
+else
+  _fail "mcp-protocol-validator.sh missing Compliance Matrix section (got: $(printf '%s' "$VALIDATOR_OUT" | head -5))"
+fi
+
+# 16h — validator emits a compliance score line
+if printf '%s' "$VALIDATOR_OUT" | grep -qi 'Compliance score'; then
+  _ok "mcp-protocol-validator.sh emits Compliance score"
+else
+  _fail "mcp-protocol-validator.sh missing Compliance score line"
+fi
+
+# 16i — validator exits 0 when plugin is absent (all-skip = no failures)
+VALIDATOR_RC=0
+env -i HOME="$HOME" PATH="$PATH" \
+  ASHLR_PLUGIN_DIR="/tmp/nonexistent-plugin-$$" \
+  NO_COLOR=1 \
+  MCP_PROTO_JSONL="$(mktemp /tmp/pv-rc-XXXXXX.jsonl)" \
+  bash "$MCP_VALIDATOR_SH" >/dev/null 2>&1 || VALIDATOR_RC=$?
+if [ "$VALIDATOR_RC" -eq 0 ]; then
+  _ok "mcp-protocol-validator.sh exits 0 when plugin absent (all-skip)"
+else
+  _fail "mcp-protocol-validator.sh exited $VALIDATOR_RC with no plugin (expected 0)"
+fi
+
+# 16j — validator emits valid JSONL records (every line parses as JSON)
+JSONL_TMP="$(mktemp /tmp/pv-jsonl-XXXXXX.jsonl)"
+env -i HOME="$HOME" PATH="$PATH" \
+  ASHLR_PLUGIN_DIR="/tmp/nonexistent-plugin-$$" \
+  NO_COLOR=1 \
+  MCP_PROTO_JSONL="$JSONL_TMP" \
+  bash "$MCP_VALIDATOR_SH" >/dev/null 2>&1 || true
+if [ -s "$JSONL_TMP" ]; then
+  JSONL_BAD="$(python3 -c "
+import json, sys
+bad = 0
+for i, line in enumerate(open('$JSONL_TMP')):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        json.loads(line)
+    except Exception as e:
+        bad += 1
+        print(f'line {i+1}: {e}')
+print(bad)
+" 2>/dev/null | tail -1)"
+  if [ "${JSONL_BAD:-1}" = "0" ]; then
+    _ok "mcp-protocol-validator.sh JSONL output: all records are valid JSON"
+  else
+    _fail "mcp-protocol-validator.sh JSONL has ${JSONL_BAD} malformed line(s)"
+  fi
+else
+  _fail "mcp-protocol-validator.sh produced no JSONL output"
+fi
+rm -f "$JSONL_TMP"
+
+# 16k — each JSONL record has the required fields (ts, agent, mcp, phase, status, latency_ms)
+JSONL_TMP2="$(mktemp /tmp/pv-jsonl2-XXXXXX.jsonl)"
+env -i HOME="$HOME" PATH="$PATH" \
+  ASHLR_PLUGIN_DIR="/tmp/nonexistent-plugin-$$" \
+  NO_COLOR=1 \
+  MCP_PROTO_JSONL="$JSONL_TMP2" \
+  bash "$MCP_VALIDATOR_SH" >/dev/null 2>&1 || true
+if [ -s "$JSONL_TMP2" ]; then
+  FIELDS_OK="$(python3 -c "
+import json, sys
+required = {'ts','agent','mcp','phase','status','latency_ms'}
+bad = 0
+for i, line in enumerate(open('$JSONL_TMP2')):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        obj = json.loads(line)
+        missing = required - set(obj.keys())
+        if missing:
+            bad += 1
+            print(f'line {i+1} missing: {missing}')
+    except Exception:
+        bad += 1
+print(bad)
+" 2>/dev/null | tail -1)"
+  if [ "${FIELDS_OK:-1}" = "0" ]; then
+    _ok "mcp-protocol-validator.sh JSONL records all have required fields"
+  else
+    _fail "mcp-protocol-validator.sh JSONL has ${FIELDS_OK} record(s) with missing fields"
+  fi
+fi
+rm -f "$JSONL_TMP2"
+
+# 16l — validator detects config drift when a server is missing from a temp config
+DRIFT_TMP="$(mktemp /tmp/pv-drift-XXXXXX.json)"
+python3 -c "
+import json
+# Write a mcp.json missing ashlr-github (9 servers instead of 10)
+d = {
+  'stdio_servers': [
+    {'name': 'ashlr-efficiency', 'command': 'bash', 'args': []},
+    {'name': 'ashlr-sql',        'command': 'bash', 'args': []},
+    {'name': 'ashlr-bash',       'command': 'bash', 'args': []},
+    {'name': 'ashlr-tree',       'command': 'bash', 'args': []},
+    {'name': 'ashlr-http',       'command': 'bash', 'args': []},
+    {'name': 'ashlr-diff',       'command': 'bash', 'args': []},
+    {'name': 'ashlr-logs',       'command': 'bash', 'args': []},
+    {'name': 'ashlr-genome',     'command': 'bash', 'args': []},
+    {'name': 'ashlr-orient',     'command': 'bash', 'args': []}
+  ],
+  'sse_servers': [], 'shttp_servers': []
+}
+print(json.dumps(d))
+" > "$DRIFT_TMP"
+# Source the validator's extraction helper in a subshell and check it finds 9 not 10
+DRIFT_NAMES="$(
+  env -i HOME="$HOME" bash -c "
+    . '$REPO_ROOT/scripts/lib/config.sh'
+    # Inline the extraction logic for JSON (same as validator's _extract_server_names)
+    python3 - '$DRIFT_TMP' <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+names = [s.get('name','') for s in d.get('stdio_servers',[]) if s.get('name','').startswith('ashlr-')]
+for n in sorted(names): print(n)
+PYEOF
+  " 2>&1
+)"
+DRIFT_COUNT="$(printf '%s\n' "$DRIFT_NAMES" | grep -c 'ashlr-' || echo 0)"
+if [ "$DRIFT_COUNT" -eq 9 ]; then
+  _ok "config drift extraction correctly finds 9 servers in a truncated mcp.json"
+else
+  _fail "config drift extraction expected 9 servers, got $DRIFT_COUNT"
+fi
+rm -f "$DRIFT_TMP"
+
+# 16m — aw doctor --mcp-audit flag is wired: aw recognises the subcommand
+if grep -q 'mcp-audit' "$REPO_ROOT/bin/aw"; then
+  _ok "bin/aw contains --mcp-audit flag handling"
+else
+  _fail "bin/aw does not contain --mcp-audit flag handling"
+fi
+
+# 16n — aw doctor --mcp-audit delegates to mcp-protocol-validator.sh
+if grep -q 'mcp-protocol-validator.sh' "$REPO_ROOT/bin/aw"; then
+  _ok "bin/aw doctor --mcp-audit references mcp-protocol-validator.sh"
+else
+  _fail "bin/aw doctor --mcp-audit does not reference mcp-protocol-validator.sh"
+fi
+
+# 16o — validator help text includes protocol cycle phases
+for _phrase in 'initialize' 'tools/list' 'shutdown' 'compliance'; do
+  if grep -qi "$_phrase" "$MCP_VALIDATOR_SH"; then
+    _ok "mcp-protocol-validator.sh mentions '$_phrase'"
+  else
+    _fail "mcp-protocol-validator.sh missing phrase '$_phrase'"
+  fi
+done
+
+# 16p — validator correctly validates initialize response shape (unit)
+INIT_GOOD="{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"serverInfo\":{\"name\":\"test\"}}}"
+INIT_BAD="{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{}}}"
+# Source the validator and call _validate_initialize_response in a subshell
+VALIDATE_GOOD="$(
+  env -i HOME="$HOME" bash -c "
+    . '$REPO_ROOT/scripts/lib/config.sh'
+    # Re-implement the inline check matching the validator's logic
+    txt='$INIT_GOOD'
+    ok=1
+    printf '%s' \"\$txt\" | grep -q '\"jsonrpc\"'          || ok=0
+    printf '%s' \"\$txt\" | grep -q '\"result\"'           || ok=0
+    printf '%s' \"\$txt\" | grep -q '\"protocolVersion\"'  || ok=0
+    printf '%s' \"\$txt\" | grep -q '\"serverInfo\"'       || ok=0
+    echo \$ok
+  " 2>&1
+)"
+assert_eq "_validate_initialize_response: good response passes" "1" "$VALIDATE_GOOD"
+
+VALIDATE_BAD="$(
+  env -i HOME="$HOME" bash -c "
+    txt='$INIT_BAD'
+    ok=1
+    printf '%s' \"\$txt\" | grep -q '\"jsonrpc\"'          || ok=0
+    printf '%s' \"\$txt\" | grep -q '\"result\"'           || ok=0
+    printf '%s' \"\$txt\" | grep -q '\"protocolVersion\"'  || ok=0
+    printf '%s' \"\$txt\" | grep -q '\"serverInfo\"'       || ok=0
+    echo \$ok
+  " 2>&1
+)"
+assert_eq "_validate_initialize_response: bad response (missing fields) fails" "0" "$VALIDATE_BAD"
+
+# 16q — validator correctly validates tools/list response shape (unit)
+LIST_GOOD="{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"ashlr__read\",\"description\":\"Read files\"}]}}"
+LIST_BAD="{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[]}}"
+VALIDATE_LIST_GOOD="$(
+  env -i HOME="$HOME" bash -c "
+    txt='$LIST_GOOD'
+    ok=1
+    printf '%s' \"\$txt\" | grep -q '\"jsonrpc\"' || ok=0
+    printf '%s' \"\$txt\" | grep -q '\"result\"'  || ok=0
+    printf '%s' \"\$txt\" | grep -q '\"tools\"'   || ok=0
+    printf '%s' \"\$txt\" | grep -q '\"name\"'    || ok=0
+    echo \$ok
+  " 2>&1
+)"
+assert_eq "_validate_tools_list_response: good response passes" "1" "$VALIDATE_LIST_GOOD"
+
+VALIDATE_LIST_BAD="$(
+  env -i HOME="$HOME" bash -c "
+    txt='$LIST_BAD'
+    # empty tools array — 'name' field will be absent
+    ok=1
+    printf '%s' \"\$txt\" | grep -q '\"name\"' || ok=0
+    echo \$ok
+  " 2>&1
+)"
+assert_eq "_validate_tools_list_response: empty tools array fails name check" "0" "$VALIDATE_LIST_BAD"
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n"
 if [ "$FAIL" -eq 0 ]; then

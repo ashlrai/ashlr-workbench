@@ -314,6 +314,17 @@ cmd_monitor() {
 
 # ─── doctor ───────────────────────────────────────────────────────────────────
 cmd_doctor() {
+  # --mcp-audit flag: run the full MCP protocol compliance validator and exit.
+  if [ "${1:-}" = "--mcp-audit" ]; then
+    local validator="$WORKBENCH/tests/mcp-protocol-validator.sh"
+    if [ ! -x "$validator" ]; then
+      bad "mcp-protocol-validator.sh not found or not executable: $validator"
+      exit 1
+    fi
+    shift
+    exec "$validator" "$@"
+  fi
+
   title "aw doctor — diagnosing common issues"
   echo
   local issues=0
@@ -443,6 +454,7 @@ ${C_BOLD}COMMANDS${C_RESET}
   ${C_CYAN}health${C_RESET}          full healthcheck (delegates to scripts/healthcheck.sh)
   ${C_CYAN}update${C_RESET}          update agents + plugin (delegates to scripts/update-all.sh)
   ${C_CYAN}doctor${C_RESET}          diagnose common issues + suggest fixes
+  ${C_CYAN}doctor --mcp-audit${C_RESET}  full MCP protocol compliance audit (initialize→tools/list→shutdown)
   ${C_CYAN}log${C_RESET} <subcmd>     view the cross-agent session log (tail/recent/stats/filter/rotate)
   ${C_CYAN}mode${C_RESET} <mode>     switch model loading (coding/trading/both/lean/status)
   ${C_CYAN}layout${C_RESET} <name>   open a multi-pane workspace (workbench/feature/parallel/research)
