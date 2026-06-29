@@ -39,6 +39,10 @@ OPENHANDS_CONTAINER="ashlr-openhands"
 # shellcheck source=scripts/lib/mcp-connection.sh
 . "$SCRIPT_DIR/lib/mcp-connection.sh"
 
+# Source the config schema registry (provides config_registry_check_all).
+# shellcheck source=scripts/lib/config-schema-registry.sh
+. "$SCRIPT_DIR/lib/config-schema-registry.sh"
+
 # ─── Colors ───────────────────────────────────────────────────────────────────
 if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then
   C_RESET=""; C_RED=""; C_GREEN=""; C_YELLOW=""; C_BOLD=""; C_DIM=""
@@ -232,6 +236,14 @@ fi
 #   'config.toml: missing [sandbox].runtime_container_image — expected from OpenHands 1.6+ schema'
 section "Agent configs (schema validation)"
 validate_all_agent_configs
+
+# ─── 10b. Config Schema Registry — migration staleness check ─────────────────
+# config-schema-registry.sh checks that every agent config is at the canonical
+# schema version and has no unapplied migration rules.  A warning here means a
+# config key has been renamed upstream but the local file hasn't been updated.
+# Run: bash scripts/lib/config-schema-registry.sh --migrate-all v1.0
+section "Config Schema Registry (migration staleness)"
+config_registry_check_all
 
 # ─── 11. Agent-MCP Handshakes ─────────────────────────────────────────────────
 # Runs tests/mcp-integration.sh in a subprocess and folds its pass/fail/skip

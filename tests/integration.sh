@@ -2423,6 +2423,273 @@ VALIDATE_LIST_BAD="$(
 )"
 assert_eq "_validate_tools_list_response: empty tools array fails name check" "0" "$VALIDATE_LIST_BAD"
 
+# ─── Test 17: config-schema-registry.sh library ──────────────────────────────
+printf "\n\033[1mTest 17: config-schema-registry.sh library\033[0m\n"
+
+SCHEMA_REGISTRY_SH="$REPO_ROOT/scripts/lib/config-schema-registry.sh"
+
+# 17a — file exists and is executable
+assert_file_executable "config-schema-registry.sh is executable" "$SCHEMA_REGISTRY_SH"
+
+# 17b — bash syntax check
+if bash -n "$SCHEMA_REGISTRY_SH" 2>/dev/null; then
+  _ok "config-schema-registry.sh passes bash syntax check"
+else
+  _fail "config-schema-registry.sh has bash syntax errors"
+fi
+
+# 17c — double-source guard
+SR_DOUBLE="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); }
+    warn() { WARN=\$((WARN+1)); }
+    bad()  { FAIL=\$((FAIL+1)); }
+    . '$SCHEMA_REGISTRY_SH'
+    . '$SCHEMA_REGISTRY_SH'
+    echo sourced_twice_ok
+  " 2>&1
+)"
+if printf '%s' "$SR_DOUBLE" | grep -q 'sourced_twice_ok'; then
+  _ok "config-schema-registry.sh double-source guard works"
+else
+  _fail "config-schema-registry.sh double-source produced errors: $SR_DOUBLE"
+fi
+
+# 17d — SCHEMA_REGISTRY_VERSION is v1.0
+SR_VERSION="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    ok() { :; }; warn() { :; }; bad() { :; }
+    . '$SCHEMA_REGISTRY_SH'
+    printf '%s' \"\${SCHEMA_REGISTRY_VERSION:-unset}\"
+  " 2>&1
+)"
+assert_eq "SCHEMA_REGISTRY_VERSION is v1.0" "v1.0" "$SR_VERSION"
+
+# 17e — required public functions are defined after sourcing
+for fn in config_validate_strict config_migrate_auto config_registry_check_all; do
+  SR_FUNC="$(
+    env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+      ok() { :; }; warn() { :; }; bad() { :; }
+      . '$SCHEMA_REGISTRY_SH'
+      if declare -f $fn >/dev/null 2>&1; then echo defined; else echo missing; fi
+    " 2>&1
+  )"
+  assert_eq "$fn function is defined" "defined" "$SR_FUNC"
+done
+
+# 17f — config_validate_strict warns on missing schema version annotation
+SR_NO_ANNOT="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    tmpfile=\"\$(mktemp /tmp/sr-test-XXXXXX.yaml)\"
+    printf 'model: gpt-4\nstream: true\n' > \"\$tmpfile\"
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); }
+    warn() { WARN=\$((WARN+1)); printf 'warn: %s\n' \"\$*\"; }
+    bad()  { FAIL=\$((FAIL+1)); printf 'bad: %s\n' \"\$*\"; }
+    . '$SCHEMA_REGISTRY_SH'
+    config_validate_strict \"\$tmpfile\" aider
+    rm -f \"\$tmpfile\"
+    echo \"WARN=\$WARN FAIL=\$FAIL\"
+  " 2>&1
+)"
+if printf '%s' "$SR_NO_ANNOT" | grep -qE 'WARN=[1-9]|warn:.*annotation'; then
+  _ok "config_validate_strict warns on missing schema version annotation"
+else
+  _fail "config_validate_strict did not warn on missing annotation (output: $SR_NO_ANNOT)"
+fi
+
+# 17g — config_validate_strict detects a deprecated key (canonical schema)
+SR_DEPR_KEY="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    tmpfile=\"\$(mktemp /tmp/sr-test-XXXXXX.yml)\"
+    printf 'api-base: http://localhost:1234/v1\nmodel: gpt-4\n' > \"\$tmpfile\"
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); }
+    warn() { WARN=\$((WARN+1)); }
+    bad()  { FAIL=\$((FAIL+1)); printf 'bad: %s\n' \"\$*\"; }
+    . '$SCHEMA_REGISTRY_SH'
+    config_validate_strict \"\$tmpfile\" aider
+    rm -f \"\$tmpfile\"
+    echo \"FAIL=\$FAIL\"
+  " 2>&1
+)"
+SR_DEPR_FAILS="$(printf '%s' "$SR_DEPR_KEY" | grep 'FAIL=' | grep -o 'FAIL=[0-9]*' | cut -d= -f2)"
+if [ "${SR_DEPR_FAILS:-0}" -ge 1 ]; then
+  _ok "config_validate_strict detects deprecated key 'api-base' (aider)"
+else
+  _fail "config_validate_strict did not catch deprecated aider key (output: $SR_DEPR_KEY)"
+fi
+
+# 17h — config_validate_strict detects unapplied migration from config-migrations.json
+SR_MIG_KEY="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    tmpfile=\"\$(mktemp /tmp/sr-test-XXXXXX.yaml)\"
+    printf 'GOOSE_LLM_MODEL: qwen3-coder-30b\nGOOSE_PROVIDER: openai\n' > \"\$tmpfile\"
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); }
+    warn() { WARN=\$((WARN+1)); }
+    bad()  { FAIL=\$((FAIL+1)); printf 'bad: %s\n' \"\$*\"; }
+    . '$SCHEMA_REGISTRY_SH'
+    config_validate_strict \"\$tmpfile\" goose
+    rm -f \"\$tmpfile\"
+    echo \"FAIL=\$FAIL\"
+  " 2>&1
+)"
+SR_MIG_FAILS="$(printf '%s' "$SR_MIG_KEY" | grep 'FAIL=' | grep -o 'FAIL=[0-9]*' | cut -d= -f2)"
+if [ "${SR_MIG_FAILS:-0}" -ge 1 ]; then
+  _ok "config_validate_strict detects unapplied migration GOOSE_LLM_MODEL->GOOSE_MODEL"
+else
+  _fail "config_validate_strict did not catch unapplied goose migration (output: $SR_MIG_KEY)"
+fi
+
+# 17i — config_validate_strict passes a clean annotated config
+SR_CLEAN="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    tmpfile=\"\$(mktemp /tmp/sr-test-XXXXXX.yaml)\"
+    printf '# ashlr-config/v1.0\nmodel: qwen3-coder-30b\nopenai-api-base: http://localhost:1234/v1\nopenai-api-key: notset\n' > \"\$tmpfile\"
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); }
+    warn() { WARN=\$((WARN+1)); }
+    bad()  { FAIL=\$((FAIL+1)); printf 'bad: %s\n' \"\$*\"; }
+    . '$SCHEMA_REGISTRY_SH'
+    config_validate_strict \"\$tmpfile\" aider
+    rm -f \"\$tmpfile\"
+    echo \"FAIL=\$FAIL\"
+  " 2>&1
+)"
+if printf '%s' "$SR_CLEAN" | grep -q 'FAIL=0'; then
+  _ok "config_validate_strict passes a clean annotated config"
+else
+  _fail "config_validate_strict incorrectly failed a clean config (output: $SR_CLEAN)"
+fi
+
+# 17j — config_migrate_auto --dry-run does not modify the file
+SR_DRY_RUN="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    tmpfile=\"\$(mktemp /tmp/sr-test-XXXXXX.yaml)\"
+    printf 'GOOSE_LLM_PROVIDER: openai\nGOOSE_MODEL: qwen3-coder-30b\n' > \"\$tmpfile\"
+    orig=\"\$(cat \"\$tmpfile\")\"
+    ok()   { :; }
+    warn() { printf 'warn: %s\n' \"\$*\"; }
+    bad()  { :; }
+    . '$SCHEMA_REGISTRY_SH'
+    config_migrate_auto \"\$tmpfile\" --agent goose --target-version v1.0 --dry-run
+    after=\"\$(cat \"\$tmpfile\")\"
+    rm -f \"\$tmpfile\"
+    if [ \"\$orig\" = \"\$after\" ]; then echo file_unchanged; else echo file_MODIFIED; fi
+  " 2>&1
+)"
+if printf '%s' "$SR_DRY_RUN" | grep -q 'file_unchanged'; then
+  _ok "config_migrate_auto --dry-run does not modify the config file"
+else
+  _fail "config_migrate_auto --dry-run unexpectedly modified the file (output: $SR_DRY_RUN)"
+fi
+if printf '%s' "$SR_DRY_RUN" | grep -qiE 'dry.run|would'; then
+  _ok "config_migrate_auto --dry-run reports what would be applied"
+else
+  _fail "config_migrate_auto --dry-run produced no dry-run output (output: $SR_DRY_RUN)"
+fi
+
+# 17k — config_migrate_auto applies a real YAML rename and writes a log
+SR_MIGRATE="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    tmpfile=\"\$(mktemp /tmp/sr-test-XXXXXX.yaml)\"
+    logfile=\"\${tmpfile}.migration-log\"
+    printf 'GOOSE_LLM_PROVIDER: openai\nGOOSE_MODEL: qwen3-coder-30b\n' > \"\$tmpfile\"
+    ok() { :; }; warn() { :; }; bad() { :; }
+    . '$SCHEMA_REGISTRY_SH'
+    config_migrate_auto \"\$tmpfile\" --agent goose --target-version v1.0 --log-path \"\$logfile\"
+    if grep -q 'GOOSE_PROVIDER' \"\$tmpfile\";     then echo key_renamed_ok;       else echo key_NOT_renamed;       fi
+    if grep -q 'GOOSE_LLM_PROVIDER' \"\$tmpfile\"; then echo old_key_still_present; else echo old_key_removed_ok; fi
+    if [ -f \"\$logfile\" ]; then echo log_written; else echo log_MISSING; fi
+    rm -f \"\$tmpfile\" \"\$logfile\"
+  " 2>&1
+)"
+if printf '%s' "$SR_MIGRATE" | grep -q 'key_renamed_ok';     then _ok "config_migrate_auto renames GOOSE_LLM_PROVIDER in YAML"
+else _fail "config_migrate_auto did not rename deprecated YAML key (output: $SR_MIGRATE)"; fi
+if printf '%s' "$SR_MIGRATE" | grep -q 'old_key_removed_ok'; then _ok "config_migrate_auto removes old deprecated key"
+else _fail "config_migrate_auto left old key in place (output: $SR_MIGRATE)"; fi
+if printf '%s' "$SR_MIGRATE" | grep -q 'log_written';        then _ok "config_migrate_auto writes a migration log file"
+else _fail "config_migrate_auto did not write a migration log (output: $SR_MIGRATE)"; fi
+
+# 17l — migration log is valid JSON with expected fields
+SR_LOG_JSON="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    tmpfile=\"\$(mktemp /tmp/sr-test-XXXXXX.yaml)\"
+    logfile=\"\${tmpfile}.migration-log\"
+    printf 'GOOSE_LLM_PROVIDER: openai\nGOOSE_MODEL: qwen3\n' > \"\$tmpfile\"
+    ok() { :; }; warn() { :; }; bad() { :; }
+    . '$SCHEMA_REGISTRY_SH'
+    config_migrate_auto \"\$tmpfile\" --agent goose --target-version v1.0 --log-path \"\$logfile\"
+    python3 -c \"
+import json, sys
+try:
+    log = json.load(open('\$logfile'))
+    assert 'timestamp' in log, 'missing timestamp'
+    assert 'agent'     in log, 'missing agent'
+    assert 'applied'   in log, 'missing applied'
+    assert 'skipped'   in log, 'missing skipped'
+    assert isinstance(log['applied'], list), 'applied not a list'
+    print('log_json_ok')
+except Exception as e:
+    print('log_json_fail: %s' % e)
+\" 2>&1
+    rm -f \"\$tmpfile\" \"\$logfile\"
+  " 2>&1
+)"
+if printf '%s' "$SR_LOG_JSON" | grep -q 'log_json_ok'; then
+  _ok "migration log is valid JSON with required fields"
+else
+  _fail "migration log JSON validation failed (output: $SR_LOG_JSON)"
+fi
+
+# 17m — config_registry_check_all runs without crashing on real agent configs
+SR_REGISTRY_ALL="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); }
+    warn() { WARN=\$((WARN+1)); }
+    bad()  { FAIL=\$((FAIL+1)); printf 'bad: %s\n' \"\$*\"; }
+    . '$SCHEMA_REGISTRY_SH'
+    config_registry_check_all
+    echo \"PASS=\$PASS WARN=\$WARN FAIL=\$FAIL exit_ok\"
+  " 2>&1
+)"
+if printf '%s' "$SR_REGISTRY_ALL" | grep -q 'exit_ok'; then
+  _ok "config_registry_check_all completes without crashing"
+else
+  _fail "config_registry_check_all crashed: $SR_REGISTRY_ALL"
+fi
+
+# 17n — per-agent config-migrations.json files exist and are valid JSON
+for _agent in openhands goose aider ashlrcode; do
+  _mig_path="$REPO_ROOT/agents/$_agent/config-migrations.json"
+  if [ -f "$_mig_path" ]; then
+    if python3 -c "import json; d=json.load(open('$_mig_path')); assert 'migrations' in d" 2>/dev/null; then
+      _ok "agents/$_agent/config-migrations.json exists and has 'migrations' key"
+    else
+      _fail "agents/$_agent/config-migrations.json exists but is invalid"
+    fi
+  else
+    _fail "agents/$_agent/config-migrations.json missing"
+  fi
+done
+
+# 17o — healthcheck.sh sources config-schema-registry.sh
+if grep -q 'config-schema-registry.sh' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh sources config-schema-registry.sh"
+else
+  _fail "healthcheck.sh does not source config-schema-registry.sh"
+fi
+
+# 17p — healthcheck.sh calls config_registry_check_all
+if grep -q 'config_registry_check_all' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh calls config_registry_check_all"
+else
+  _fail "healthcheck.sh does not call config_registry_check_all"
+fi
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n"
 if [ "$FAIL" -eq 0 ]; then

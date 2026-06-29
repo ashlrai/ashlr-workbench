@@ -1,0 +1,44 @@
+{
+  "_comment": "Migration rules for OpenHands config.toml. Each entry describes a key rename or transform from a prior version to v1.0.",
+  "agent": "openhands",
+  "from_version": "v0.8",
+  "to_version": "v1.0",
+  "schema_ref": "ashlr-config/v1.0",
+  "migrations": [
+    {
+      "old_key": "llm.api_base",
+      "new_key": "llm.base_url",
+      "version": "v0.8→v1.0",
+      "transform": "rename",
+      "description": "Renamed in OpenHands 0.9+ — base_url is the current key name"
+    },
+    {
+      "old_key": "sandbox.container_image",
+      "new_key": "sandbox.runtime_container_image",
+      "version": "v0.9→v1.0",
+      "transform": "rename",
+      "description": "Renamed in OpenHands 1.0+ — runtime_container_image is the current key name"
+    },
+    {
+      "old_key": "core.max_steps",
+      "new_key": "core.max_iterations",
+      "version": "v0.9→v1.0",
+      "transform": "rename",
+      "description": "Renamed in OpenHands 1.x — max_iterations is the current key name"
+    },
+    {
+      "old_key": "llm.openai_base_url",
+      "new_key": "llm.base_url",
+      "version": "v0.7→v1.0",
+      "transform": "rename",
+      "description": "Legacy alias openai_base_url replaced by base_url in OpenHands 0.9+"
+    },
+    {
+      "old_key": "sandbox.use_docker",
+      "new_key": "sandbox.use_host_network",
+      "version": "v0.8→v1.0",
+      "transform": "rename",
+      "description": "use_docker replaced by use_host_network; semantic is inverted — review manually"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "_comment": "Migration rules for Goose config.yaml. Each entry describes a key rename or transform from a prior version to v1.0.",
+  "agent": "goose",
+  "from_version": "v0.8",
+  "to_version": "v1.0",
+  "schema_ref": "ashlr-config/v1.0",
+  "migrations": [
+    {
+      "old_key": "GOOSE_LLM_PROVIDER",
+      "new_key": "GOOSE_PROVIDER",
+      "version": "v0.8→v1.0",
+      "transform": "rename",
+      "description": "Renamed in Goose 1.x — use GOOSE_PROVIDER"
+    },
+    {
+      "old_key": "GOOSE_LLM_MODEL",
+      "new_key": "GOOSE_MODEL",
+      "version": "v0.8→v1.0",
+      "transform": "rename",
+      "description": "Renamed in Goose 1.x — use GOOSE_MODEL"
+    },
+    {
+      "old_key": "OPENAI_BASE_URL",
+      "new_key": "OPENAI_HOST",
+      "version": "v0.8→v1.0",
+      "transform": "rename",
+      "description": "Renamed for Goose — use OPENAI_HOST (without /v1 suffix)"
+    },
+    {
+      "old_key": "GOOSE_DEBUG",
+      "new_key": "GOOSE_LOG_LEVEL",
+      "version": "v0.9→v1.0",
+      "transform": "rename",
+      "description": "GOOSE_DEBUG boolean replaced by GOOSE_LOG_LEVEL string (debug|info|warn|error)"
+    },
+    {
+      "old_key": "GOOSE_MAX_CONTEXT",
+      "new_key": "GOOSE_MAX_TOKENS",
+      "version": "v0.8→v1.0",
+      "transform": "rename",
+      "description": "Renamed in Goose 1.x — use GOOSE_MAX_TOKENS"
+    }
+  ]
+}

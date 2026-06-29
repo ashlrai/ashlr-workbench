@@ -1,0 +1,44 @@
+{
+  "_comment": "Migration rules for Aider aider.conf.yml. Each entry describes a key rename or transform from a prior version to v1.0.",
+  "agent": "aider",
+  "from_version": "v0.27",
+  "to_version": "v1.0",
+  "schema_ref": "ashlr-config/v1.0",
+  "migrations": [
+    {
+      "old_key": "api-base",
+      "new_key": "openai-api-base",
+      "version": "v0.27→v1.0",
+      "transform": "rename",
+      "description": "Renamed in Aider 0.28+ — use openai-api-base"
+    },
+    {
+      "old_key": "api-key",
+      "new_key": "openai-api-key",
+      "version": "v0.27→v1.0",
+      "transform": "rename",
+      "description": "Renamed in Aider 0.28+ — use openai-api-key"
+    },
+    {
+      "old_key": "no-auto-commits",
+      "new_key": "auto-commits",
+      "version": "v0.29→v1.0",
+      "transform": "rename",
+      "description": "Boolean inversion: no-auto-commits true becomes auto-commits false; review manually"
+    },
+    {
+      "old_key": "openai-api-version",
+      "new_key": "api-version",
+      "version": "v0.30→v1.0",
+      "transform": "rename",
+      "description": "Renamed in Aider 0.30+ — openai-api-version shortened to api-version"
+    },
+    {
+      "old_key": "show-model-warnings",
+      "new_key": "model-warnings",
+      "version": "v0.28→v1.0",
+      "transform": "rename",
+      "description": "Renamed in Aider 0.28+ — use model-warnings"
+    }
+  ]
+}

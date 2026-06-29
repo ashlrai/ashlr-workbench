@@ -1,0 +1,45 @@
+{
+  "_comment": "Migration rules for ashlrcode settings.json. Each entry describes a key rename or transform from a prior version to v1.0.",
+  "agent": "ashlrcode",
+  "from_version": "v0.8",
+  "to_version": "v1.0",
+  "schema_ref": "ashlr-config/v1.0",
+  "migrations": [
+    {
+      "old_key": "base_url",
+      "new_key": "baseURL",
+      "version": "v0.8→v1.0",
+      "transform": "rename",
+      "description": "ashlrcode uses camelCase baseURL — snake_case base_url is silently ignored"
+    },
+    {
+      "old_key": "api_key",
+      "new_key": "apiKeyEnvVar",
+      "version": "v0.8→v1.0",
+      "transform": "rename",
+      "description": "Inline api_key deprecated — use apiKeyEnvVar pointing to an env var name"
+    },
+    {
+      "old_key": "model",
+      "new_key": "providers",
+      "version": "v0.7→v1.0",
+      "transform": "rename",
+      "root_only": true,
+      "description": "Top-level model key replaced by providers.primary.model in v0.8+"
+    },
+    {
+      "old_key": "mcp_servers",
+      "new_key": "mcpServers",
+      "version": "v0.8→v1.0",
+      "transform": "rename",
+      "description": "Renamed from snake_case mcp_servers to camelCase mcpServers"
+    },
+    {
+      "old_key": "disable_permissions",
+      "new_key": "dangerouslySkipPermissions",
+      "version": "v0.9→v1.0",
+      "transform": "rename",
+      "description": "disable_permissions renamed to dangerouslySkipPermissions for clarity"
+    }
+  ]
+}
