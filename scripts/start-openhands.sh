@@ -27,28 +27,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 AGENT_DIR="$REPO_ROOT/agents/openhands"
 
-# ---- config ----
-CONTAINER_NAME="ashlr-openhands"
-IMAGE="ghcr.io/openhands/openhands:1.6.0"
-AGENT_SERVER_IMAGE="ghcr.io/openhands/agent-server:1.15.0-python"
-LLM_BASE_URL="http://host.docker.internal:1234/v1"
-LLM_MODEL="openai/qwen/qwen3-coder-30b"    # LiteLLM format; matches LM Studio id
-LLM_API_KEY="local-llm"                     # LM Studio ignores the value
-CONTEXT_LENGTH="32768"
-PORT="3000"
-# Pre-built sandbox runtime image. Setting this skips the apt-get-based
-# image build that OpenHands otherwise kicks off on first conversation
-# (which fails inside Docker Desktop due to build-network DNS issues).
-# Must match the oh_v<version>_<hash> tag OpenHands computes for this
-# release. Update when bumping IMAGE above.
-SANDBOX_RUNTIME_IMAGE="ghcr.io/openhands/runtime:oh_v1.6.0_93pv7lc0x29cbiqa_3j4mdepm5f3d15vq"
+# ---- config (all defaults live in scripts/lib/config.sh; override via env) ----
+# shellcheck source=lib/config.sh
+. "$SCRIPT_DIR/lib/config.sh"
 
-STATE_DIR="$HOME/.openhands"
-WORKSPACE_HOST="$HOME/Desktop"
-ASHLR_PLUGIN_DIR="$HOME/Desktop/ashlr-plugin"
-CACHE_DIR="$HOME/.cache/ashlr-workbench"
-BUN_DIR="$CACHE_DIR/bun-linux-aarch64"
-BUN_VERSION_URL="https://github.com/oven-sh/bun/releases/latest/download/bun-linux-aarch64.zip"
+CONTAINER_NAME="$OPENHANDS_CONTAINER"
+IMAGE="$OPENHANDS_IMAGE"
+AGENT_SERVER_IMAGE="$OPENHANDS_AGENT_SERVER_IMAGE"
+LLM_BASE_URL="$OPENHANDS_LLM_BASE_URL"
+LLM_MODEL="$OPENHANDS_LLM_MODEL"
+LLM_API_KEY="$OPENHANDS_LLM_API_KEY"
+CONTEXT_LENGTH="$OPENHANDS_CONTEXT_LENGTH"
+PORT="$OPENHANDS_PORT"
+SANDBOX_RUNTIME_IMAGE="$OPENHANDS_SANDBOX_IMAGE"
+
+STATE_DIR="$OPENHANDS_STATE_DIR"
+WORKSPACE_HOST="$OPENHANDS_WORKSPACE_HOST"
+# ASHLR_PLUGIN_DIR already exported by config.sh
+CACHE_DIR="$OPENHANDS_CACHE_DIR"
+BUN_DIR="$CACHE_DIR/bun-linux-${BUN_LINUX_ARCH}"
+# BUN_VERSION_URL already exported by config.sh
 
 # ---- logging ----
 log() { printf "\033[36m[start]\033[0m %s\n" "$*"; }
@@ -95,7 +93,7 @@ fi
 # ---- 2. stage linux bun ----
 mkdir -p "$BUN_DIR"
 if [ ! -x "$BUN_DIR/bun" ]; then
-  log "Downloading bun-linux-aarch64 to $BUN_DIR ..."
+  log "Downloading bun-linux-${BUN_LINUX_ARCH} to $BUN_DIR ..."
   tmpzip="$(mktemp -t bun-XXXX.zip)"
   if ! curl -sSL --fail "$BUN_VERSION_URL" -o "$tmpzip"; then
     err "Failed to download $BUN_VERSION_URL"; exit 1

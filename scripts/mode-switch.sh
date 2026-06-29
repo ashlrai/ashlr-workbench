@@ -3,8 +3,9 @@
 # Usage: mode-switch.sh <coding|trading|both|lean|status>
 set -euo pipefail
 
-OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
-LMS="${HOME}/.lmstudio/bin/lms"
+# shellcheck source=lib/config.sh
+. "$(dirname "$0")/lib/config.sh"
+LMS="$LMS_CLI"
 
 # Colors (respect NO_COLOR)
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then

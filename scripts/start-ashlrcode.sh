@@ -14,7 +14,8 @@
 
 set -euo pipefail
 
-WORKBENCH="/Users/masonwyatt/Desktop/ashlr-workbench"
+# shellcheck source=lib/config.sh
+. "$(dirname "$0")/lib/config.sh"
 WB_CONFIG_DIR="$WORKBENCH/agents/ashlrcode"
 WB_SETTINGS="$WB_CONFIG_DIR/settings.json"
 

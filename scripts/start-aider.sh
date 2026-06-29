@@ -12,9 +12,10 @@
 
 set -euo pipefail
 
-WORKBENCH="/Users/masonwyatt/Desktop/ashlr-workbench"
+# shellcheck source=lib/config.sh
+. "$(dirname "$0")/lib/config.sh"
 CONFIG="$WORKBENCH/agents/aider/aider.conf.yml"
-ENDPOINT="http://localhost:1234/v1"
+ENDPOINT="$LM_STUDIO_URL"
 
 # Resolve target project dir (first positional arg, default cwd)
 PROJECT_DIR="${1:-$(pwd)}"
