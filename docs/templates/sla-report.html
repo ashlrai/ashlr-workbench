@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cross-Agent SLA Compliance Report</title>
+  <style>
+    /* ── Reset + base ─────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      line-height: 1.6;
+      padding: 2rem;
+    }
+    a { color: #63b3ed; text-decoration: none; }
+    code { font-family: "SF Mono", "Fira Code", Menlo, monospace; font-size: 0.85em; }
+
+    /* ── Layout ───────────────────────────────────────────────────── */
+    .container { max-width: 1200px; margin: 0 auto; }
+    section { margin-bottom: 2.5rem; }
+
+    /* ── Header ───────────────────────────────────────────────────── */
+    header {
+      border-bottom: 1px solid #2d3748;
+      padding-bottom: 1.25rem;
+      margin-bottom: 2rem;
+    }
+    header h1 { font-size: 1.6rem; font-weight: 700; color: #f7fafc; }
+    header h1 span { color: #63b3ed; }
+    .meta { margin-top: 0.5rem; font-size: 0.82rem; color: #718096; }
+    .meta span { margin-right: 1.5rem; }
+
+    /* ── Status banner ────────────────────────────────────────────── */
+    .status-banner {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 1rem 1.5rem;
+      border-radius: 8px;
+      margin-bottom: 2rem;
+      font-weight: 600;
+      font-size: 1.05rem;
+    }
+    .status-pass { background: #1a3a2a; border: 1px solid #38a169; color: #68d391; }
+    .status-fail { background: #3b1a1a; border: 1px solid #e53e3e; color: #fc8181; }
+    .status-icon { font-size: 1.4rem; }
+    .stat-pills { display: flex; gap: 1rem; margin-left: auto; }
+    .pill {
+      padding: 0.25rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    .pill-neutral { background: #2d3748; color: #a0aec0; }
+    .pill-warn    { background: #744210; color: #f6ad55; }
+    .pill-crit    { background: #63171b; color: #fc8181; }
+
+    /* ── Section headings ─────────────────────────────────────────── */
+    h2 {
+      font-size: 1rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #a0aec0;
+      margin-bottom: 1rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid #2d3748;
+    }
+
+    /* ── Tables ───────────────────────────────────────────────────── */
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+    thead th {
+      background: #1a202c;
+      color: #a0aec0;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-size: 0.75rem;
+      padding: 0.6rem 0.9rem;
+      text-align: left;
+      border-bottom: 1px solid #2d3748;
+      white-space: nowrap;
+    }
+    tbody tr { border-bottom: 1px solid #1a202c; }
+    tbody tr:hover { background: #1a202c; }
+    tbody td {
+      padding: 0.55rem 0.9rem;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    .agent-name { font-weight: 600; color: #63b3ed; }
+
+    /* ── SLA cell states ──────────────────────────────────────────── */
+    .sla-breach { color: #fc8181; font-weight: 600; }
+    td.sla-breach::after { content: " ✗"; }
+
+    /* ── Trend ────────────────────────────────────────────────────── */
+    .trend-up   { color: #fc8181; }
+    .trend-down { color: #68d391; }
+    .trend-flat { color: #a0aec0; }
+
+    /* ── Badges ───────────────────────────────────────────────────── */
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.6rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+    .badge-pass { background: #276749; color: #9ae6b4; }
+    .badge-fail { background: #742a2a; color: #feb2b2; }
+
+    /* ── Violations ───────────────────────────────────────────────── */
+    .violations-list { list-style: none; }
+    .violations-list li {
+      padding: 0.6rem 1rem;
+      margin-bottom: 0.5rem;
+      border-radius: 6px;
+      font-size: 0.88rem;
+    }
+    .violation-critical {
+      background: #2d1515;
+      border-left: 3px solid #e53e3e;
+      color: #fed7d7;
+    }
+    .violation-warning {
+      background: #2d2415;
+      border-left: 3px solid #d69e2e;
+      color: #fefcbf;
+    }
+    .violations-list code { color: #90cdf4; }
+
+    /* ── Speed flags ──────────────────────────────────────────────── */
+    .speed-flags { list-style: none; }
+    .speed-flags li {
+      padding: 0.4rem 0.75rem;
+      margin-bottom: 0.35rem;
+      background: #1e2532;
+      border-left: 3px solid #4299e1;
+      border-radius: 4px;
+      font-size: 0.88rem;
+      color: #bee3f8;
+    }
+
+    /* ── Tool matrix ──────────────────────────────────────────────── */
+    .tool-matrix thead th { font-size: 0.7rem; writing-mode: vertical-lr; transform: rotate(180deg); height: 80px; }
+    .tool-matrix td { text-align: center; }
+    .tool-present { color: #68d391; font-weight: 700; }
+    .tool-absent  { color: #4a5568; }
+
+    /* ── All-pass message ─────────────────────────────────────────── */
+    .all-pass { color: #68d391; font-style: italic; font-size: 0.9rem; }
+
+    /* ── Footer ───────────────────────────────────────────────────── */
+    footer {
+      margin-top: 3rem;
+      padding-top: 1rem;
+      border-top: 1px solid #2d3748;
+      font-size: 0.78rem;
+      color: #4a5568;
+      display: flex;
+      justify-content: space-between;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <header>
+    <h1>Cross-Agent <span>SLA Compliance</span> Report</h1>
+    <div class="meta">
+      <span>Generated: {{GENERATED_AT}}</span>
+      <span>Log: <code>{{LOG_PATH}}</code></span>
+      <span>Baseline: <code>{{BASELINE_AGENT}}</code></span>
+      <span>p99 Threshold: <code>{{THRESHOLD_MS}}ms</code></span>
+      <span>Agents: {{AGENT_COUNT}}</span>
+      <span>Sessions: {{SESSION_COUNT}}</span>
+    </div>
+  </header>
+
+  <!-- ── Status banner ──────────────────────────────────────────────────── -->
+  <div class="status-banner {{OVERALL_STATUS_CLS}}">
+    <span class="status-icon">{{OVERALL_STATUS_CLS == "status-pass" ? "✓" : "✗"}}</span>
+    <span>SLA Status: <strong>{{OVERALL_STATUS}}</strong></span>
+    <div class="stat-pills">
+      <span class="pill pill-neutral">{{AGENT_COUNT}} agents</span>
+      <span class="pill pill-neutral">{{SESSION_COUNT}} sessions</span>
+      <span class="pill {{CRITICAL_COUNT == "0" ? "pill-neutral" : "pill-crit"}}">{{CRITICAL_COUNT}} critical</span>
+      <span class="pill {{WARNING_COUNT == "0" ? "pill-neutral" : "pill-warn"}}">{{WARNING_COUNT}} warnings</span>
+    </div>
+  </div>
+
+  <!-- ── Per-Agent Metrics Table ────────────────────────────────────────── -->
+  <section>
+    <h2>Per-Agent Metrics</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Agent</th>
+            <th>Sessions</th>
+            <th>Avg lat (ms)</th>
+            <th>P50 (ms)</th>
+            <th>P95 (ms)</th>
+            <th>P99 ▶ SLA (ms)</th>
+            <th>MCP Timeout%</th>
+            <th>Err Rate%</th>
+            <th>Avg Dur</th>
+            <th>Trend (ms/sess)</th>
+            <th>Unique Tools</th>
+            <th>SLA</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{AGENT_TABLE_ROWS}}
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:0.5rem;font-size:0.75rem;color:#718096;">
+      ✗ = SLA breach &nbsp;|&nbsp; ↑ trend = latency degrading over time &nbsp;|&nbsp;
+      P99 SLA threshold: {{THRESHOLD_MS}}ms &nbsp;|&nbsp;
+      MCP timeout SLA: &gt;5% = breach &nbsp;|&nbsp; Error rate SLA: &gt;20% = breach
+    </p>
+  </section>
+
+  <!-- ── SLA Violations ─────────────────────────────────────────────────── -->
+  <section>
+    <h2>SLA Violations &amp; Warnings</h2>
+    <ul class="violations-list">
+      {{VIOLATIONS_HTML}}
+    </ul>
+  </section>
+
+  <!-- ── Speed Flags ────────────────────────────────────────────────────── -->
+  <section>
+    <h2>Systematic Speed Divergences</h2>
+    {{SPEED_FLAGS_HTML}}
+  </section>
+
+  <!-- ── Tool Coverage Matrix ───────────────────────────────────────────── -->
+  <section>
+    <h2>Tool Coverage Matrix</h2>
+    <div class="table-wrap">
+      {{TOOL_MATRIX_HTML}}
+    </div>
+    <p style="margin-top:0.5rem;font-size:0.75rem;color:#718096;">
+      ✓ = tool used by agent in at least one session &nbsp;|&nbsp; ✗ = never used
+    </p>
+  </section>
+
+  <!-- ── Actionable Fixes ───────────────────────────────────────────────── -->
+  <section>
+    <h2>Actionable Fixes</h2>
+    <div style="font-size:0.88rem;color:#a0aec0;line-height:1.8;">
+      <p><strong style="color:#e2e8f0;">High p99 latency:</strong>
+        Check network round-trip to LLM endpoint; reduce context window size;
+        enable tool-call batching where supported; consider a faster backend for
+        latency-sensitive agents.</p>
+      <p style="margin-top:0.75rem;"><strong style="color:#e2e8f0;">MCP timeout rate &gt;5%:</strong>
+        Increase MCP server startup timeout (<code>MCP_CONN_TIMEOUT</code>);
+        confirm MCP stdio server process exits cleanly; check for resource
+        contention on the host; restart MCP servers between sessions.</p>
+      <p style="margin-top:0.75rem;"><strong style="color:#e2e8f0;">Session error rate &gt;20%:</strong>
+        Review agent logs for common error patterns; verify LLM endpoint
+        credentials; ensure workspace permissions are correct; check for
+        incompatible model versions.</p>
+      <p style="margin-top:0.75rem;"><strong style="color:#e2e8f0;">Latency trend degradation:</strong>
+        Monitor host memory pressure; restart agent processes periodically;
+        check for context accumulation growing unboundedly; profile tool-call
+        overhead over time.</p>
+      <p style="margin-top:0.75rem;"><strong style="color:#e2e8f0;">Tool coverage gap:</strong>
+        Verify agent MCP server configuration includes all required servers;
+        run <code>aw replay analyze-divergence</code> for a detailed tool
+        preference matrix; check agent system prompts for tool-use guidance.</p>
+    </div>
+  </section>
+
+  <footer>
+    <span>ashlr-workbench · session-replay validate-sla</span>
+    <span>Generated {{GENERATED_AT}}</span>
+  </footer>
+
+</div>
+</body>
+</html>

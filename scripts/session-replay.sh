@@ -12,6 +12,9 @@
 #   diff <session-id>           variance vs. baseline (first session on record)
 #   export <session-id>         export events  [--format csv|json]
 #   analyze-divergence          detect systematic agent-to-agent gaps
+#   validate-sla                SLA compliance scorecard across agents
+#                               [--baseline-agent NAME] [--threshold-ms MS]
+#                               [--report-format jsonl|html|both] [--out-dir DIR]
 #   help                        show this message
 #
 # Environment:
@@ -23,10 +26,19 @@
 #   ./scripts/session-replay.sh compare <id1> <id2>
 #   ./scripts/session-replay.sh diff <id>
 #   ./scripts/session-replay.sh export <id> --format csv
+#   ./scripts/session-replay.sh validate-sla --baseline-agent goose --threshold-ms 2000
+#   ./scripts/session-replay.sh validate-sla --report-format html --out-dir /tmp/sla-out
 
 set -uo pipefail
 
 REPLAY_LOG="${ASHLR_REPLAY_LOG_PATH:-$HOME/.ashlr-workbench/session-replay.jsonl}"
+
+# ─── Load divergence analyzer library ────────────────────────────────────────
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/session-divergence-analyzer.sh
+if [ -f "${_SCRIPT_DIR}/lib/session-divergence-analyzer.sh" ]; then
+  . "${_SCRIPT_DIR}/lib/session-divergence-analyzer.sh"
+fi
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then
@@ -647,6 +659,71 @@ print(f"  Total sessions analysed: {len(sessions)}")
 PY
 }
 
+# ─── cmd: validate-sla ────────────────────────────────────────────────────────
+cmd_validate_sla() {
+  local baseline_agent=""
+  local threshold_ms="2000"
+  local report_format="both"
+  local out_dir
+  out_dir="${ASHLR_SLA_OUT_DIR:-$(pwd)/sla-reports}"
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --baseline-agent)    baseline_agent="${2:-}"; shift 2 ;;
+      --baseline-agent=*)  baseline_agent="${1#--baseline-agent=}"; shift ;;
+      --threshold-ms)      threshold_ms="${2:-2000}"; shift 2 ;;
+      --threshold-ms=*)    threshold_ms="${1#--threshold-ms=}"; shift ;;
+      --report-format)     report_format="${2:-both}"; shift 2 ;;
+      --report-format=*)   report_format="${1#--report-format=}"; shift ;;
+      --out-dir)           out_dir="${2:-}"; shift 2 ;;
+      --out-dir=*)         out_dir="${1#--out-dir=}"; shift ;;
+      *) die "validate-sla: unknown argument '$1'" ;;
+    esac
+  done
+
+  ensure_log_readable || return 0
+
+  # Validate report-format
+  case "$report_format" in
+    jsonl|html|both) ;;
+    *) die "validate-sla: --report-format must be 'jsonl', 'html', or 'both'" ;;
+  esac
+
+  # Validate threshold
+  case "$threshold_ms" in
+    ''|*[!0-9]*) die "validate-sla: --threshold-ms must be a positive integer" ;;
+  esac
+
+  title "Session SLA Validation"
+  dim "  Log            : $REPLAY_LOG"
+  dim "  Baseline agent : ${baseline_agent:-auto}"
+  dim "  Threshold      : ${threshold_ms}ms (tool-call p99)"
+  dim "  Report format  : $report_format"
+  dim "  Output dir     : $out_dir"
+
+  # Check the analyzer library was loaded
+  if ! command -v sda_validate_sla >/dev/null 2>&1; then
+    die "session-divergence-analyzer.sh library not loaded — check scripts/lib/"
+  fi
+
+  sda_validate_sla \
+    "$REPLAY_LOG" \
+    "$baseline_agent" \
+    "$threshold_ms" \
+    "$report_format" \
+    "$out_dir"
+  local rc=$?
+
+  if [ "$report_format" = "jsonl" ] || [ "$report_format" = "both" ]; then
+    info "JSONL scorecard: ${out_dir}/compliance-scorecard.jsonl"
+  fi
+  if [ "$report_format" = "html" ] || [ "$report_format" = "both" ]; then
+    info "HTML report    : ${out_dir}/sla-report.html"
+  fi
+
+  return $rc
+}
+
 # ─── cmd: help ────────────────────────────────────────────────────────────────
 cmd_help() {
   cat <<EOF
@@ -663,6 +740,11 @@ ${C_BOLD}SUBCOMMANDS${C_RESET}
   ${C_CYAN}export${C_RESET} <session-id>            export events as JSON (default)
   ${C_CYAN}export${C_RESET} <session-id> --format csv|json
   ${C_CYAN}analyze-divergence${C_RESET}             systematic agent-to-agent performance analysis
+  ${C_CYAN}validate-sla${C_RESET}                   SLA compliance scorecard + HTML report
+    ${C_DIM}--baseline-agent NAME${C_RESET}         agent to compare others against (default: auto)
+    ${C_DIM}--threshold-ms MS${C_RESET}             tool-call p99 latency SLA ceiling (default: 2000)
+    ${C_DIM}--report-format jsonl|html|both${C_RESET}  output format (default: both)
+    ${C_DIM}--out-dir DIR${C_RESET}                 output directory (default: ./sla-reports)
   ${C_CYAN}help${C_RESET}                           show this message
 
 ${C_BOLD}LOG FILE${C_RESET}
@@ -695,6 +777,8 @@ main() {
     export)              cmd_export           "$@" ;;
     analyze-divergence|analyze_divergence|divergence)
                          cmd_analyze_divergence "$@" ;;
+    validate-sla|validate_sla|sla)
+                         cmd_validate_sla       "$@" ;;
     help|-h|--help)      cmd_help                  ;;
     *)
       printf "%sERROR:%s unknown subcommand '%s'\n" "$C_RED" "$C_RESET" "$cmd" >&2
