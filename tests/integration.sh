@@ -1270,6 +1270,246 @@ else
   _fail "start-openhands.sh has bash syntax errors after router integration"
 fi
 
+# ─── Test 12: mcp-connection.sh library + mcp-integration.sh ─────────────────
+printf "\n\033[1mTest 12: mcp-connection.sh + mcp-integration.sh\033[0m\n"
+
+MCP_CONN_SH="$REPO_ROOT/scripts/lib/mcp-connection.sh"
+MCP_INT_SH="$REPO_ROOT/tests/mcp-integration.sh"
+
+# 12a — mcp-connection.sh exists and is executable
+assert_file_executable "mcp-connection.sh is executable" "$MCP_CONN_SH"
+
+# 12b — mcp-connection.sh passes bash syntax check
+if bash -n "$MCP_CONN_SH" 2>/dev/null; then
+  _ok "mcp-connection.sh passes bash syntax check"
+else
+  _fail "mcp-connection.sh has bash syntax errors"
+fi
+
+# 12c — double-source guard
+DOUBLE_MC="$(
+  env -i HOME="$HOME" bash -c "
+    . '$CONFIG_SH'
+    . '$MCP_CONN_SH'
+    . '$MCP_CONN_SH'
+    echo sourced_twice_ok
+  " 2>&1
+)"
+if printf '%s' "$DOUBLE_MC" | grep -q 'sourced_twice_ok'; then
+  _ok "mcp-connection.sh double-source guard works"
+else
+  _fail "mcp-connection.sh double-source produced errors: $DOUBLE_MC"
+fi
+
+# 12d — all public functions are defined after sourcing
+for fn in _mcp_conn_emit_jsonl _mcp_conn_jsonrpc_msg _mcp_conn_find_runtime \
+          _mcp_conn_probe_server mcp_conn_extract_servers_from_json mcp_conn_validate_agent; do
+  MC_FUNC="$(
+    env -i HOME="$HOME" bash -c "
+      . '$CONFIG_SH'
+      . '$MCP_CONN_SH'
+      if declare -f $fn >/dev/null 2>&1; then echo defined; else echo missing; fi
+    " 2>&1
+  )"
+  assert_eq "$fn function is defined" "defined" "$MC_FUNC"
+done
+
+# 12e — _mcp_conn_emit_jsonl produces valid JSON with required fields
+MC_JSONL_TMP="$(mktemp /tmp/mc-test-XXXXXX.jsonl)"
+MC_JSONL_OUT="$(
+  env -i HOME="$HOME" MCP_CONN_JSONL_OUT="$MC_JSONL_TMP" bash -c "
+    . '$CONFIG_SH'
+    . '$MCP_CONN_SH'
+    _mcp_conn_emit_jsonl 'aider' 'ashlr-bash' 'pass' '123' 'handshake OK'
+    cat '$MC_JSONL_TMP'
+  " 2>&1
+)"
+rm -f "$MC_JSONL_TMP"
+MC_JSONL_OK="$(printf '%s' "$MC_JSONL_OUT" | python3 -c "
+import sys, json
+line = sys.stdin.read().strip().splitlines()[-1]
+try:
+    o = json.loads(line)
+    assert o.get('agent')      == 'aider',       f'bad agent: {o}'
+    assert o.get('mcp')        == 'ashlr-bash',  f'bad mcp: {o}'
+    assert o.get('status')     == 'pass',         f'bad status: {o}'
+    assert o.get('latency_ms') == 123,            f'bad latency_ms: {o}'
+    assert 'ts' in o,                             f'missing ts: {o}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "_mcp_conn_emit_jsonl produces valid JSONL with required fields" "ok" "$MC_JSONL_OK"
+
+# 12f — _mcp_conn_jsonrpc_msg produces a framed message with Content-Length
+MC_FRAME="$(
+  env -i HOME="$HOME" bash -c "
+    . '$CONFIG_SH'
+    . '$MCP_CONN_SH'
+    _mcp_conn_jsonrpc_msg 1 'initialize' '{}'
+  " 2>&1
+)"
+if printf '%s' "$MC_FRAME" | grep -q 'Content-Length:'; then
+  _ok "_mcp_conn_jsonrpc_msg produces Content-Length framed message"
+else
+  _fail "_mcp_conn_jsonrpc_msg missing Content-Length header (got: $MC_FRAME)"
+fi
+if printf '%s' "$MC_FRAME" | grep -q '"jsonrpc"'; then
+  _ok "_mcp_conn_jsonrpc_msg body contains jsonrpc field"
+else
+  _fail "_mcp_conn_jsonrpc_msg body missing jsonrpc field"
+fi
+
+# 12g — _mcp_conn_find_runtime picks bun for .ts files
+MC_RUNTIME="$(
+  env -i HOME="$HOME" PATH="$PATH" bash -c "
+    . '$CONFIG_SH'
+    . '$MCP_CONN_SH'
+    _mcp_conn_find_runtime 'servers/bash-server.ts'
+  " 2>&1
+)"
+if [ "$MC_RUNTIME" = "bun" ] || [ "$MC_RUNTIME" = "node" ]; then
+  _ok "_mcp_conn_find_runtime returns a valid runtime for .ts: $MC_RUNTIME"
+else
+  _fail "_mcp_conn_find_runtime returned unexpected value for .ts: '$MC_RUNTIME'"
+fi
+
+# 12h — _mcp_conn_probe_server returns 3 for a missing file
+MC_PROBE_MISSING="$(
+  env -i HOME="$HOME" PATH="$PATH" bash -c "
+    . '$CONFIG_SH'
+    . '$MCP_CONN_SH'
+    _mcp_conn_probe_server test-agent ashlr-bash /nonexistent/path/server.ts
+    echo rc=\$?
+  " 2>&1
+)"
+assert_eq "_mcp_conn_probe_server rc=3 for missing entry file" \
+  "rc=3" "$(printf '%s' "$MC_PROBE_MISSING" | grep '^rc=')"
+
+# 12i — _mcp_conn_probe_server returns 4 when no runtime is available
+MC_PROBE_NORUNTIME="$(
+  env -i HOME="$HOME" PATH="/usr/bin:/bin" bash -c "
+    . '$CONFIG_SH'
+    . '$MCP_CONN_SH'
+    tmpf=\"\$(mktemp /tmp/mc-test-XXXXXX.ts)\"
+    printf 'console.log(\"hello\")' > \"\$tmpf\"
+    _mcp_conn_probe_server test-agent ashlr-bash \"\$tmpf\"
+    rc=\$?
+    rm -f \"\$tmpf\"
+    echo rc=\$rc
+  " 2>&1
+)"
+assert_eq "_mcp_conn_probe_server rc=4 when no runtime available" \
+  "rc=4" "$(printf '%s' "$MC_PROBE_NORUNTIME" | grep '^rc=')"
+
+# 12j — mcp_conn_extract_servers_from_json parses ashlrcode settings.json
+MC_EXTRACT="$(
+  env -i HOME="$HOME" bash -c "
+    . '$CONFIG_SH'
+    . '$MCP_CONN_SH'
+    mcp_conn_extract_servers_from_json '$REPO_ROOT/agents/ashlrcode/settings.json'
+  " 2>&1
+)"
+if printf '%s' "$MC_EXTRACT" | grep -q 'ashlr-bash'; then
+  _ok "mcp_conn_extract_servers_from_json finds ashlr-bash in ashlrcode settings.json"
+else
+  _fail "mcp_conn_extract_servers_from_json did not find ashlr-bash (got: $MC_EXTRACT)"
+fi
+if printf '%s' "$MC_EXTRACT" | grep -q 'ashlr-efficiency'; then
+  _ok "mcp_conn_extract_servers_from_json finds ashlr-efficiency in ashlrcode settings.json"
+else
+  _fail "mcp_conn_extract_servers_from_json did not find ashlr-efficiency"
+fi
+
+# 12k — mcp-integration.sh exists and is executable
+assert_file_executable "mcp-integration.sh is executable" "$MCP_INT_SH"
+
+# 12l — mcp-integration.sh passes bash syntax check
+if bash -n "$MCP_INT_SH" 2>/dev/null; then
+  _ok "mcp-integration.sh passes bash syntax check"
+else
+  _fail "mcp-integration.sh has bash syntax errors"
+fi
+
+# 12m — mcp-integration.sh runs without error and produces a Result: line
+MC_INT_TMP="$(mktemp /tmp/mc-int-test-XXXXXX.jsonl)"
+MC_INT_OUT="$(
+  env -i HOME="$HOME" PATH="$PATH" NO_COLOR=1 \
+    MCP_CONN_TIMEOUT=5 MCP_INTEGRATION_JSONL="$MC_INT_TMP" \
+    bash "$MCP_INT_SH" 2>&1
+)"
+MC_INT_RC=$?
+rm -f "$MC_INT_TMP"
+if printf '%s' "$MC_INT_OUT" | grep -q 'Result:'; then
+  _ok "mcp-integration.sh produces a Result: summary line"
+else
+  _fail "mcp-integration.sh produced no Result: line (rc=$MC_INT_RC, output: $MC_INT_OUT)"
+fi
+
+# 12n — mcp-integration.sh exits 0 (all pass or skip, no fail)
+if [ "$MC_INT_RC" -eq 0 ]; then
+  _ok "mcp-integration.sh exits 0 (no failures)"
+else
+  _fail "mcp-integration.sh exited $MC_INT_RC (unexpected failures)"
+fi
+
+# 12o — mcp-integration.sh output contains the matrix table header
+if printf '%s' "$MC_INT_OUT" | grep -q 'MCP Server'; then
+  _ok "mcp-integration.sh output contains matrix table header"
+else
+  _fail "mcp-integration.sh output missing matrix table header"
+fi
+
+# 12p — mcp-integration.sh output lists all 4 agent names
+for _ag in aider goose ashlrcode openhands; do
+  if printf '%s' "$MC_INT_OUT" | grep -q "$_ag"; then
+    _ok "mcp-integration.sh output mentions agent: $_ag"
+  else
+    _fail "mcp-integration.sh output missing agent: $_ag"
+  fi
+done
+
+# 12q — mcp-integration.sh writes JSONL records
+MC_INT_TMP2="$(mktemp /tmp/mc-int-test2-XXXXXX.jsonl)"
+env -i HOME="$HOME" PATH="$PATH" NO_COLOR=1 \
+  MCP_CONN_TIMEOUT=5 MCP_INTEGRATION_JSONL="$MC_INT_TMP2" \
+  bash "$MCP_INT_SH" >/dev/null 2>&1 || true
+MC_JSONL_LINES="$(wc -l < "$MC_INT_TMP2" 2>/dev/null | tr -d ' ' || echo 0)"
+rm -f "$MC_INT_TMP2"
+if [ "${MC_JSONL_LINES:-0}" -gt 0 ]; then
+  _ok "mcp-integration.sh writes JSONL records ($MC_JSONL_LINES lines)"
+else
+  _fail "mcp-integration.sh wrote no JSONL records"
+fi
+
+# 12r — healthcheck.sh sources mcp-connection.sh
+if grep -q 'mcp-connection.sh' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh sources mcp-connection.sh"
+else
+  _fail "healthcheck.sh does not source mcp-connection.sh"
+fi
+
+# 12s — healthcheck.sh contains Agent-MCP Handshakes section
+if grep -q 'Agent-MCP Handshakes' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh contains 'Agent-MCP Handshakes' section"
+else
+  _fail "healthcheck.sh missing 'Agent-MCP Handshakes' section"
+fi
+
+# 12t — healthcheck.sh references mcp-integration.sh
+if grep -q 'mcp-integration.sh' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh references mcp-integration.sh"
+else
+  _fail "healthcheck.sh does not reference mcp-integration.sh"
+fi
+
+# 12u — healthcheck.sh still passes bash syntax check after additions
+if bash -n "$REPO_ROOT/scripts/healthcheck.sh" 2>/dev/null; then
+  _ok "healthcheck.sh passes bash syntax check after Agent-MCP Handshakes addition"
+else
+  _fail "healthcheck.sh has bash syntax errors after Agent-MCP Handshakes addition"
+fi
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n"
 if [ "$FAIL" -eq 0 ]; then

@@ -35,6 +35,10 @@ OPENHANDS_CONTAINER="ashlr-openhands"
 # shellcheck source=scripts/lib/config-validate.sh
 . "$SCRIPT_DIR/lib/config-validate.sh"
 
+# Source the MCP connection library (provides run_mcp_handshake_checks).
+# shellcheck source=scripts/lib/mcp-connection.sh
+. "$SCRIPT_DIR/lib/mcp-connection.sh"
+
 # ─── Colors ───────────────────────────────────────────────────────────────────
 if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then
   C_RESET=""; C_RED=""; C_GREEN=""; C_YELLOW=""; C_BOLD=""; C_DIM=""
@@ -228,6 +232,53 @@ fi
 #   'config.toml: missing [sandbox].runtime_container_image — expected from OpenHands 1.6+ schema'
 section "Agent configs (schema validation)"
 validate_all_agent_configs
+
+# ─── 11. Agent-MCP Handshakes ─────────────────────────────────────────────────
+# Runs tests/mcp-integration.sh in a subprocess and folds its pass/fail/skip
+# counts into the healthcheck totals.  The integration test performs a real
+# JSON-RPC stdio handshake with each ashlr-plugin MCP server for each agent,
+# catching config schema drift, missing entrypoints, and socket lifecycle issues.
+section "Agent-MCP Handshakes"
+
+_MCP_INT_SCRIPT="$WORKBENCH/tests/mcp-integration.sh"
+if [ ! -f "$_MCP_INT_SCRIPT" ]; then
+  bad "mcp-integration.sh not found at $_MCP_INT_SCRIPT"
+elif [ ! -x "$_MCP_INT_SCRIPT" ]; then
+  bad "mcp-integration.sh is not executable — run: chmod +x $_MCP_INT_SCRIPT"
+else
+  # Run the integration suite; capture combined output so we can parse counts.
+  # We pass NO_COLOR=1 so the output is parseable regardless of terminal state.
+  _MCP_INT_JSONL="$(mktemp /tmp/mcp-int-hc-XXXXXX.jsonl)"
+  _MCP_INT_OUTPUT="$(
+    NO_COLOR=1 \
+    MCP_CONN_TIMEOUT="${MCP_CONN_TIMEOUT:-5}" \
+    MCP_INTEGRATION_JSONL="$_MCP_INT_JSONL" \
+    bash "$_MCP_INT_SCRIPT" 2>&1
+  )" || true
+  rm -f "$_MCP_INT_JSONL"
+
+  # Extract the summary line: "X passed, Y failed, Z skipped"
+  _MCP_INT_SUMMARY="$(printf '%s' "$_MCP_INT_OUTPUT" | grep 'Result:' | tail -1 || true)"
+  _MCP_INT_PASS="$(printf '%s' "$_MCP_INT_SUMMARY" | grep -oE '[0-9]+ passed'  | grep -oE '[0-9]+'  || echo 0)"
+  _MCP_INT_FAIL="$(printf '%s' "$_MCP_INT_SUMMARY" | grep -oE '[0-9]+ failed'  | grep -oE '[0-9]+'  || echo 0)"
+  _MCP_INT_SKIP="$(printf '%s' "$_MCP_INT_SUMMARY" | grep -oE '[0-9]+ skipped' | grep -oE '[0-9]+'  || echo 0)"
+
+  if [ "${_MCP_INT_FAIL:-0}" -gt 0 ]; then
+    bad "Agent-MCP handshakes: ${_MCP_INT_PASS} passed, ${_MCP_INT_FAIL} failed, ${_MCP_INT_SKIP} skipped"
+    # Print the first few failure lines for quick diagnosis.
+    printf '%s' "$_MCP_INT_OUTPUT" | grep -i 'FAIL' | head -10 | while IFS= read -r _line; do
+      printf "    %s\n" "$_line"
+    done
+  elif [ -n "$_MCP_INT_SUMMARY" ]; then
+    if [ "${_MCP_INT_SKIP:-0}" -gt 0 ] && [ "${_MCP_INT_PASS:-0}" -eq 0 ]; then
+      warn "Agent-MCP handshakes: all probes skipped (plugin/runtime unavailable) — ${_MCP_INT_SKIP} skipped"
+    else
+      ok "Agent-MCP handshakes: ${_MCP_INT_PASS} passed, ${_MCP_INT_SKIP} skipped"
+    fi
+  else
+    warn "Agent-MCP handshakes: integration test produced no summary — run manually: bash $_MCP_INT_SCRIPT"
+  fi
+fi
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n%sResult:%s %s%d passed%s, %s%d warnings%s, %s%d failed%s\n" \
