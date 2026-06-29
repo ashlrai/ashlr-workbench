@@ -37,8 +37,40 @@ fi
 # when the user quits the REPL.
 # shellcheck source=lib/session-log.sh
 . "$(dirname "$0")/lib/session-log.sh"
+# shellcheck source=lib/session-events.sh
+. "$(dirname "$0")/lib/session-events.sh"
 log_session_start aider "$PROJECT_DIR"
-trap 'log_session_end aider "$PROJECT_DIR"' EXIT
+_SE_AIDER_START="$(date +%s)"
+# Determine MCP count from aider config (yaml entries under mcp-servers key)
+_SE_AIDER_MCP=0
+if command -v python3 >/dev/null 2>&1 && [ -f "$CONFIG" ]; then
+  _SE_AIDER_MCP="$(python3 -c "
+import sys
+try:
+    data = open('$CONFIG').read()
+    import re
+    m = re.search(r'mcp[-_]?servers\s*:\s*\n((?:[ \t]+\S.*\n?)*)', data)
+    if m:
+        entries = [l for l in m.group(1).splitlines() if l.strip() and not l.strip().startswith('#')]
+        print(len(entries))
+    else:
+        print(0)
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)"
+fi
+on_agent_start "aider" "$$" "lm-studio/qwen3-coder-30b" "$_SE_AIDER_MCP"
+trap '
+  _SE_AIDER_RC=$?
+  _SE_AIDER_DUR=$(( $(date +%s) - _SE_AIDER_START ))
+  if [ "$_SE_AIDER_RC" -ne 0 ]; then
+    on_agent_error "aider" "$_SE_AIDER_RC" "exit code $_SE_AIDER_RC"
+    on_session_end "aider" "$_SE_AIDER_DUR" "error"
+  else
+    on_session_end "aider" "$_SE_AIDER_DUR" "ok"
+  fi
+  log_session_end aider "$PROJECT_DIR"
+' EXIT
 
 cd "$PROJECT_DIR"
 # Run (don't exec) so the EXIT trap fires and writes session_end.

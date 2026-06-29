@@ -24,6 +24,18 @@ set -uo pipefail
 # ─── Resolve log path ─────────────────────────────────────────────────────────
 LOG_PATH="${ASHLR_SESSION_LOG_PATH:-$HOME/.ashlr/session-log.jsonl}"
 
+# Resolve workbench root (symlink-safe) so we can delegate to session-analytics.sh.
+_AW_LOG_SCRIPT="${BASH_SOURCE[0]}"
+while [ -L "$_AW_LOG_SCRIPT" ]; do
+  _link="$(readlink "$_AW_LOG_SCRIPT")"
+  case "$_link" in
+    /*) _AW_LOG_SCRIPT="$_link" ;;
+    *)  _AW_LOG_SCRIPT="$(dirname "$_AW_LOG_SCRIPT")/$_link" ;;
+  esac
+done
+_AW_LOG_BIN_DIR="$(cd "$(dirname "$_AW_LOG_SCRIPT")" && pwd)"
+_AW_LOG_ANALYTICS="$_AW_LOG_BIN_DIR/../scripts/session-analytics.sh"
+
 # ─── Colors (NO_COLOR-aware, TTY-aware) ───────────────────────────────────────
 if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then
   C_RESET=""; C_DIM=""; C_BOLD=""
@@ -130,6 +142,7 @@ ${C_BOLD}COMMANDS${C_RESET}
   tail [--agent <name>]     stream new entries as they are appended
   recent [N]                last N entries (default 20), newest first
   stats                     counts by agent / event + last-24h activity
+  session-analytics         structured session retrospective (uptime, errors, shape)
   filter --agent <name>     all entries matching agent (newest first)
   rotate                    force rotation (renames → .jsonl.1)
   help                      show this help
@@ -300,6 +313,13 @@ main() {
     tail)          cmd_tail "$@" ;;
     recent)        cmd_recent "$@" ;;
     stats)         cmd_stats "$@" ;;
+    session-analytics|analytics)
+      if [ -x "$_AW_LOG_ANALYTICS" ]; then
+        exec "$_AW_LOG_ANALYTICS" "$@"
+      else
+        die "session-analytics.sh not found at $_AW_LOG_ANALYTICS"
+      fi
+      ;;
     filter)        cmd_filter "$@" ;;
     rotate)        cmd_rotate "$@" ;;
     help|-h|--help) cmd_help ;;

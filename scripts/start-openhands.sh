@@ -60,8 +60,49 @@ err() { printf "\033[31m[start]\033[0m %s\n" "$*" >&2; }
 # separately visible via `aw status` / `docker ps`.
 # shellcheck source=lib/session-log.sh
 . "$SCRIPT_DIR/lib/session-log.sh"
+# shellcheck source=lib/session-events.sh
+. "$SCRIPT_DIR/lib/session-events.sh"
 log_session_start openhands "$WORKSPACE_HOST"
-trap 'log_session_end openhands "$WORKSPACE_HOST"' EXIT
+
+# Derive MCP count from mcp.json stdio_servers array
+_SE_OH_MCP=0
+_SE_OH_MCP_JSON="$AGENT_DIR/mcp.json"
+if command -v python3 >/dev/null 2>&1 && [ -f "$_SE_OH_MCP_JSON" ]; then
+  _SE_OH_MCP="$(python3 -c "
+import json, sys
+try:
+    m = json.load(open('$_SE_OH_MCP_JSON'))
+    print(len(m.get('stdio_servers', [])))
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)"
+  # Emit a spawn event per MCP server
+  python3 -c "
+import json, sys
+try:
+    m = json.load(open('$_SE_OH_MCP_JSON'))
+    for s in m.get('stdio_servers', []):
+        print(s.get('name', '?'))
+except Exception:
+    pass
+" 2>/dev/null | while IFS= read -r srv_name; do
+    [ -n "$srv_name" ] && on_mcp_server_spawn "openhands" "$srv_name"
+  done
+fi
+
+_SE_OH_START="$(date +%s)"
+on_agent_start "openhands" "$$" "$LLM_MODEL" "$_SE_OH_MCP"
+trap '
+  _SE_OH_RC=$?
+  _SE_OH_DUR=$(( $(date +%s) - _SE_OH_START ))
+  if [ "$_SE_OH_RC" -ne 0 ]; then
+    on_agent_error "openhands" "$_SE_OH_RC" "launcher exit code $_SE_OH_RC"
+    on_session_end "openhands" "$_SE_OH_DUR" "error"
+  else
+    on_session_end "openhands" "$_SE_OH_DUR" "ok"
+  fi
+  log_session_end openhands "$WORKSPACE_HOST"
+' EXIT
 
 # ---- 1. preflight ----
 log "Preflight checks..."

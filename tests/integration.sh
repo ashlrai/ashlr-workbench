@@ -643,6 +643,339 @@ for agent in openhands aider goose ashlrcode; do
   fi
 done
 
+# ─── Test 10: session-events.sh library ──────────────────────────────────────
+printf "\n\033[1mTest 10: session-events.sh library\033[0m\n"
+
+SESSION_EVENTS_SH="$REPO_ROOT/scripts/lib/session-events.sh"
+
+# 10a — file exists and is executable
+assert_file_executable "session-events.sh is executable" "$SESSION_EVENTS_SH"
+
+# 10b — bash syntax check
+if bash -n "$SESSION_EVENTS_SH" 2>/dev/null; then
+  _ok "session-events.sh passes bash syntax check"
+else
+  _fail "session-events.sh has bash syntax errors"
+fi
+
+# 10c — double-source guard
+DOUBLE_SE="$(
+  env -i HOME="$HOME" bash -c "
+    . '$SESSION_EVENTS_SH'
+    . '$SESSION_EVENTS_SH'
+    echo sourced_twice_ok
+  " 2>&1
+)"
+if printf '%s' "$DOUBLE_SE" | grep -q 'sourced_twice_ok'; then
+  _ok "session-events.sh double-source guard works"
+else
+  _fail "session-events.sh double-source produced errors: $DOUBLE_SE"
+fi
+
+# 10d — all four public functions are defined after sourcing
+for fn in on_agent_start on_agent_error on_mcp_server_spawn on_session_end; do
+  FUNC_CHK="$(
+    env -i HOME="$HOME" bash -c "
+      . '$SESSION_EVENTS_SH'
+      if declare -f $fn >/dev/null 2>&1; then echo defined; else echo missing; fi
+    " 2>&1
+  )"
+  assert_eq "$fn function is defined" "defined" "$FUNC_CHK"
+done
+
+# 10e — on_agent_start emits a well-formed JSON line to the events file
+SE_TMP="$(mktemp /tmp/se-test-XXXXXX.jsonl)"
+SE_RESULT="$(
+  env -i HOME="$HOME" ASHLR_SESSION_EVENTS_PATH="$SE_TMP" bash -c "
+    . '$SESSION_EVENTS_SH'
+    on_agent_start 'aider' '12345' 'lm-studio/qwen3-coder-30b' '5'
+    cat '$SE_TMP'
+  " 2>&1
+)"
+rm -f "$SE_TMP"
+# Must be valid JSON with the expected fields
+SE_JSON_OK="$(printf '%s' "$SE_RESULT" | python3 -c "
+import sys, json
+line = sys.stdin.read().strip()
+try:
+    o = json.loads(line)
+    assert o.get('event') == 'agent_start', f'bad event: {o}'
+    assert o.get('agent') == 'aider', f'bad agent: {o}'
+    assert o.get('pid')   == '12345', f'bad pid: {o}'
+    assert o.get('model') == 'lm-studio/qwen3-coder-30b', f'bad model: {o}'
+    assert o.get('mcp_count') == '5', f'bad mcp_count: {o}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "on_agent_start emits valid JSON with correct fields" "ok" "$SE_JSON_OK"
+
+# 10f — on_agent_error emits a well-formed JSON line
+SE_TMP="$(mktemp /tmp/se-test-XXXXXX.jsonl)"
+SE_ERR_RESULT="$(
+  env -i HOME="$HOME" ASHLR_SESSION_EVENTS_PATH="$SE_TMP" bash -c "
+    . '$SESSION_EVENTS_SH'
+    on_agent_error 'goose' '1' 'TOML parse error on line 42'
+    cat '$SE_TMP'
+  " 2>&1
+)"
+rm -f "$SE_TMP"
+SE_ERR_OK="$(printf '%s' "$SE_ERR_RESULT" | python3 -c "
+import sys, json
+line = sys.stdin.read().strip()
+try:
+    o = json.loads(line)
+    assert o.get('event') == 'agent_error', f'bad event: {o}'
+    assert o.get('agent') == 'goose', f'bad agent: {o}'
+    assert o.get('exit_code') == '1', f'bad exit_code: {o}'
+    assert 'TOML' in o.get('stderr', ''), f'bad stderr: {o}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "on_agent_error emits valid JSON with correct fields" "ok" "$SE_ERR_OK"
+
+# 10g — on_mcp_server_spawn emits a well-formed JSON line
+SE_TMP="$(mktemp /tmp/se-test-XXXXXX.jsonl)"
+SE_MCP_RESULT="$(
+  env -i HOME="$HOME" ASHLR_SESSION_EVENTS_PATH="$SE_TMP" bash -c "
+    . '$SESSION_EVENTS_SH'
+    on_mcp_server_spawn 'openhands' 'ashlr-efficiency'
+    cat '$SE_TMP'
+  " 2>&1
+)"
+rm -f "$SE_TMP"
+SE_MCP_OK="$(printf '%s' "$SE_MCP_RESULT" | python3 -c "
+import sys, json
+line = sys.stdin.read().strip()
+try:
+    o = json.loads(line)
+    assert o.get('event')  == 'mcp_server_spawn', f'bad event: {o}'
+    assert o.get('agent')  == 'openhands', f'bad agent: {o}'
+    assert o.get('server') == 'ashlr-efficiency', f'bad server: {o}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "on_mcp_server_spawn emits valid JSON with correct fields" "ok" "$SE_MCP_OK"
+
+# 10h — on_session_end emits a well-formed JSON line
+SE_TMP="$(mktemp /tmp/se-test-XXXXXX.jsonl)"
+SE_END_RESULT="$(
+  env -i HOME="$HOME" ASHLR_SESSION_EVENTS_PATH="$SE_TMP" bash -c "
+    . '$SESSION_EVENTS_SH'
+    on_session_end 'aider' '120' 'ok'
+    cat '$SE_TMP'
+  " 2>&1
+)"
+rm -f "$SE_TMP"
+SE_END_OK="$(printf '%s' "$SE_END_RESULT" | python3 -c "
+import sys, json
+line = sys.stdin.read().strip()
+try:
+    o = json.loads(line)
+    assert o.get('event')    == 'session_end', f'bad event: {o}'
+    assert o.get('agent')    == 'aider', f'bad agent: {o}'
+    assert o.get('duration') == '120', f'bad duration: {o}'
+    assert o.get('status')   == 'ok', f'bad status: {o}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "on_session_end emits valid JSON with correct fields" "ok" "$SE_END_OK"
+
+# 10i — ASHLR_SESSION_EVENTS=0 kill switch suppresses all writes
+SE_TMP="$(mktemp /tmp/se-test-XXXXXX.jsonl)"
+SE_KILL_RESULT="$(
+  env -i HOME="$HOME" \
+    ASHLR_SESSION_EVENTS="0" \
+    ASHLR_SESSION_EVENTS_PATH="$SE_TMP" bash -c "
+    . '$SESSION_EVENTS_SH'
+    on_agent_start 'aider' '99' 'test-model' '0'
+    on_session_end 'aider' '5' 'ok'
+    wc -l < '$SE_TMP' | tr -d ' '
+  " 2>&1
+)"
+rm -f "$SE_TMP"
+assert_eq "ASHLR_SESSION_EVENTS=0 suppresses all writes" "0" "$SE_KILL_RESULT"
+
+# 10j — session id is stable across start+end events within one shell (correlation)
+SE_TMP="$(mktemp /tmp/se-test-XXXXXX.jsonl)"
+SE_CORR_RESULT="$(
+  env -i HOME="$HOME" ASHLR_SESSION_EVENTS_PATH="$SE_TMP" bash -c "
+    . '$SESSION_EVENTS_SH'
+    on_agent_start 'aider' '1' 'model' '0'
+    on_session_end 'aider' '30' 'ok'
+    python3 -c \"
+import json, sys
+lines = [json.loads(l) for l in open('$SE_TMP') if l.strip()]
+ids = set(o.get('session','') for o in lines)
+print('correlated' if len(ids) == 1 and '' not in ids else f'not-correlated:{ids}')
+\"
+  " 2>&1
+)"
+rm -f "$SE_TMP"
+assert_eq "session id correlates across agent_start and session_end" "correlated" "$SE_CORR_RESULT"
+
+# 10k — start-aider.sh sources session-events.sh
+if grep -q 'session-events.sh' "$REPO_ROOT/scripts/start-aider.sh"; then
+  _ok "start-aider.sh sources session-events.sh"
+else
+  _fail "start-aider.sh does not source session-events.sh"
+fi
+if grep -q 'on_agent_start' "$REPO_ROOT/scripts/start-aider.sh"; then
+  _ok "start-aider.sh calls on_agent_start"
+else
+  _fail "start-aider.sh does not call on_agent_start"
+fi
+
+# 10l — start-ashlrcode.sh sources session-events.sh and calls hooks
+if grep -q 'session-events.sh' "$REPO_ROOT/scripts/start-ashlrcode.sh"; then
+  _ok "start-ashlrcode.sh sources session-events.sh"
+else
+  _fail "start-ashlrcode.sh does not source session-events.sh"
+fi
+if grep -q 'on_agent_start' "$REPO_ROOT/scripts/start-ashlrcode.sh"; then
+  _ok "start-ashlrcode.sh calls on_agent_start"
+else
+  _fail "start-ashlrcode.sh does not call on_agent_start"
+fi
+
+# 10m — start-goose.sh sources session-events.sh and calls hooks
+if grep -q 'session-events.sh' "$REPO_ROOT/scripts/start-goose.sh"; then
+  _ok "start-goose.sh sources session-events.sh"
+else
+  _fail "start-goose.sh does not source session-events.sh"
+fi
+if grep -q 'on_mcp_server_spawn' "$REPO_ROOT/scripts/start-goose.sh"; then
+  _ok "start-goose.sh calls on_mcp_server_spawn"
+else
+  _fail "start-goose.sh does not call on_mcp_server_spawn"
+fi
+
+# 10n — start-openhands.sh sources session-events.sh and calls hooks
+if grep -q 'session-events.sh' "$REPO_ROOT/scripts/start-openhands.sh"; then
+  _ok "start-openhands.sh sources session-events.sh"
+else
+  _fail "start-openhands.sh does not source session-events.sh"
+fi
+if grep -q 'on_mcp_server_spawn' "$REPO_ROOT/scripts/start-openhands.sh"; then
+  _ok "start-openhands.sh calls on_mcp_server_spawn"
+else
+  _fail "start-openhands.sh does not call on_mcp_server_spawn"
+fi
+
+# 10o — session-analytics.sh exists and passes syntax check
+SESSION_ANALYTICS_SH="$REPO_ROOT/scripts/session-analytics.sh"
+assert_file_executable "session-analytics.sh is executable" "$SESSION_ANALYTICS_SH"
+if bash -n "$SESSION_ANALYTICS_SH" 2>/dev/null; then
+  _ok "session-analytics.sh passes bash syntax check"
+else
+  _fail "session-analytics.sh has bash syntax errors"
+fi
+
+# 10p — session-analytics.sh --help exits 0 and mentions all 4 report sections
+SA_HELP="$(
+  env -i HOME="$HOME" NO_COLOR=1 bash -c "
+    '$SESSION_ANALYTICS_SH' --help
+  " 2>&1
+)"
+if printf '%s' "$SA_HELP" | grep -qi 'uptime'; then
+  _ok "session-analytics.sh --help mentions uptime"
+else
+  _fail "session-analytics.sh --help missing uptime section (got: $SA_HELP)"
+fi
+if printf '%s' "$SA_HELP" | grep -qi 'error\|crash'; then
+  _ok "session-analytics.sh --help mentions errors/crashes"
+else
+  _fail "session-analytics.sh --help missing errors section"
+fi
+if printf '%s' "$SA_HELP" | grep -qi 'shape\|session'; then
+  _ok "session-analytics.sh --help mentions session shape"
+else
+  _fail "session-analytics.sh --help missing session shape section"
+fi
+
+# 10q — session-analytics.sh runs cleanly on a synthetic event log
+SA_TMP_LOG="$(mktemp /tmp/sa-test-XXXXXX.jsonl)"
+# Write 3 synthetic events: start, mcp spawn, end
+python3 -c "
+import json, datetime
+now = datetime.datetime.utcnow().replace(microsecond=0)
+def ts(offset_s=0):
+    t = now.replace(second=now.second + offset_s) if offset_s < 60 else now
+    return t.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+
+events = [
+    {'ts': ts(0),  'event': 'agent_start',     'agent': 'aider',
+     'session': 'abc123', 'pid': '111', 'model': 'qwen3', 'mcp_count': '2'},
+    {'ts': ts(1),  'event': 'mcp_server_spawn', 'agent': 'aider',
+     'session': 'abc123', 'server': 'ashlr-efficiency'},
+    {'ts': ts(30), 'event': 'session_end',      'agent': 'aider',
+     'session': 'abc123', 'duration': '30', 'status': 'ok'},
+    {'ts': ts(5),  'event': 'agent_start',      'agent': 'goose',
+     'session': 'def456', 'pid': '222', 'model': 'qwen3', 'mcp_count': '3'},
+    {'ts': ts(10), 'event': 'agent_error',       'agent': 'goose',
+     'session': 'def456', 'exit_code': '1', 'stderr': 'TOML parse error'},
+    {'ts': ts(15), 'event': 'agent_error',       'agent': 'goose',
+     'session': 'def456', 'exit_code': '1', 'stderr': 'TOML parse error'},
+    {'ts': ts(60), 'event': 'session_end',       'agent': 'goose',
+     'session': 'def456', 'duration': '60', 'status': 'error'},
+]
+for e in events:
+    print(json.dumps(e))
+" > "$SA_TMP_LOG"
+
+SA_REPORT="$(
+  env -i HOME="$HOME" NO_COLOR=1 \
+    ASHLR_SESSION_EVENTS_PATH="$SA_TMP_LOG" \
+    bash -c "'$SESSION_ANALYTICS_SH'" 2>&1
+)"
+rm -f "$SA_TMP_LOG"
+
+# Must contain each of the four section headers
+for section in "AGENT UPTIME" "MCP SERVER" "ERROR CLUSTERING" "SESSION SHAPE"; do
+  if printf '%s' "$SA_REPORT" | grep -qi "$section"; then
+    _ok "session-analytics report contains '$section' section"
+  else
+    _fail "session-analytics report missing '$section' section (output: $SA_REPORT)"
+  fi
+done
+
+# Must report aider and goose in the session shape
+if printf '%s' "$SA_REPORT" | grep -qi 'aider'; then
+  _ok "session-analytics report mentions aider"
+else
+  _fail "session-analytics report missing aider"
+fi
+if printf '%s' "$SA_REPORT" | grep -qi 'goose'; then
+  _ok "session-analytics report mentions goose"
+else
+  _fail "session-analytics report missing goose"
+fi
+
+# 10r — aw-log delegates 'session-analytics' to the analytics script
+if grep -q 'session-analytics' "$REPO_ROOT/bin/aw-log"; then
+  _ok "aw-log dispatches 'session-analytics' subcommand"
+else
+  _fail "aw-log does not dispatch 'session-analytics' subcommand"
+fi
+if grep -q 'session-analytics.sh' "$REPO_ROOT/bin/aw-log"; then
+  _ok "aw-log references session-analytics.sh"
+else
+  _fail "aw-log does not reference session-analytics.sh"
+fi
+
+# 10s — aw-log help output includes session-analytics
+AW_LOG_HELP="$(
+  env -i HOME="$HOME" NO_COLOR=1 bash -c "'$REPO_ROOT/bin/aw-log' help" 2>&1
+)"
+if printf '%s' "$AW_LOG_HELP" | grep -q 'session-analytics'; then
+  _ok "aw-log help lists session-analytics subcommand"
+else
+  _fail "aw-log help missing session-analytics (got: $AW_LOG_HELP)"
+fi
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n"
 if [ "$FAIL" -eq 0 ]; then

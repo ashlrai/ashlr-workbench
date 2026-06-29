@@ -227,8 +227,37 @@ fi
 # ─── Session log ──────────────────────────────────────────────────────────────
 # shellcheck source=lib/session-log.sh
 . "$SCRIPT_DIR/lib/session-log.sh"
+# shellcheck source=lib/session-events.sh
+. "$SCRIPT_DIR/lib/session-events.sh"
 log_session_start ashlrcode "$PWD"
-trap 'log_session_end ashlrcode "$PWD"' EXIT
+
+# Derive MCP count from workbench settings.json
+_SE_AW_MCP=0
+if command -v python3 >/dev/null 2>&1 && [ -f "$WB_SETTINGS" ]; then
+  _SE_AW_MCP="$(python3 -c "
+import json, sys
+try:
+    s = json.load(open('$WB_SETTINGS'))
+    mcp = s.get('mcpServers', {})
+    print(len(mcp))
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)"
+fi
+
+_SE_AW_START="$(date +%s)"
+on_agent_start "ashlrcode" "$$" "$MODEL_ID" "$_SE_AW_MCP"
+trap '
+  _SE_AW_RC=$?
+  _SE_AW_DUR=$(( $(date +%s) - _SE_AW_START ))
+  if [ "$_SE_AW_RC" -ne 0 ]; then
+    on_agent_error "ashlrcode" "$_SE_AW_RC" "exit code $_SE_AW_RC"
+    on_session_end "ashlrcode" "$_SE_AW_DUR" "error"
+  else
+    on_session_end "ashlrcode" "$_SE_AW_DUR" "ok"
+  fi
+  log_session_end ashlrcode "$PWD"
+' EXIT
 
 # ─── Welcome banner (interactive only) ───────────────────────────────────────
 if [ -z "$PROMPT" ] && [ -t 1 ]; then

@@ -68,8 +68,65 @@ runtime_cfg="$runtime_cfg_dir/config.yaml"
 # ─── Session log (cross-agent trace) ──────────────────────────────────────────
 # shellcheck source=lib/session-log.sh
 . "$script_dir/lib/session-log.sh"
+# shellcheck source=lib/session-events.sh
+. "$script_dir/lib/session-events.sh"
 log_session_start goose "$GOOSE_WORKSPACE"
-trap 'log_session_end goose "$GOOSE_WORKSPACE"' EXIT
+
+# Derive MCP count from the source config YAML (count extension entries)
+_SE_GOOSE_MCP=0
+if command -v python3 >/dev/null 2>&1 && [ -f "$source_cfg" ]; then
+  _SE_GOOSE_MCP="$(python3 -c "
+import sys, re
+try:
+    data = open('$source_cfg').read()
+    # YAML list items under 'extensions:' are lines starting with '- '
+    in_ext = False
+    count = 0
+    for line in data.splitlines():
+        if re.match(r'^extensions\s*:', line):
+            in_ext = True
+            continue
+        if in_ext:
+            if re.match(r'^\S', line) and not re.match(r'^-', line):
+                break
+            if re.match(r'^\s*-\s+\S', line):
+                count += 1
+    print(count)
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)"
+fi
+
+# Emit MCP server spawn events for each configured extension
+if command -v python3 >/dev/null 2>&1 && [ -f "$source_cfg" ]; then
+  while IFS= read -r srv_name; do
+    [ -n "$srv_name" ] && on_mcp_server_spawn "goose" "$srv_name"
+  done <<_GOOSE_SERVERS
+$(python3 -c "
+import sys, re
+try:
+    data = open('$source_cfg').read()
+    for m in re.finditer(r'name\s*:\s*([^\n]+)', data):
+        print(m.group(1).strip())
+except Exception:
+    pass
+" 2>/dev/null || true)
+_GOOSE_SERVERS
+fi
+
+_SE_GOOSE_START="$(date +%s)"
+on_agent_start "goose" "$$" "lm-studio/qwen3-coder-30b" "$_SE_GOOSE_MCP"
+trap '
+  _SE_GOOSE_RC=$?
+  _SE_GOOSE_DUR=$(( $(date +%s) - _SE_GOOSE_START ))
+  if [ "$_SE_GOOSE_RC" -ne 0 ]; then
+    on_agent_error "goose" "$_SE_GOOSE_RC" "exit code $_SE_GOOSE_RC"
+    on_session_end "goose" "$_SE_GOOSE_DUR" "error"
+  else
+    on_session_end "goose" "$_SE_GOOSE_DUR" "ok"
+  fi
+  log_session_end goose "$GOOSE_WORKSPACE"
+' EXIT
 
 # ─── Sanity checks ────────────────────────────────────────────────────────────
 if ! command -v goose >/dev/null 2>&1; then
