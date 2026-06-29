@@ -99,6 +99,93 @@ else
   warn "not running (optional fallback — \`ollama serve\`)"
 fi
 
+# ─── 3b. LLM Backend Auto-Discovery ──────────────────────────────────────────
+section "LLM Backend Auto-Discovery"
+
+# Source the router library to get access to probing + policy functions.
+_HC_ROUTER_SH="$SCRIPT_DIR/lib/llm-router.sh"
+if [ ! -f "$_HC_ROUTER_SH" ]; then
+  warn "llm-router.sh not found at $_HC_ROUTER_SH — skipping backend discovery"
+else
+  # shellcheck source=scripts/lib/llm-router.sh
+  . "$_HC_ROUTER_SH"
+  # Probe all endpoints with a short timeout so healthcheck stays fast.
+  ASHLR_LLM_PROBE_TIMEOUT="${ASHLR_LLM_PROBE_TIMEOUT:-3}" \
+  ASHLR_LLM_ROUTER_EVENTS=0 \
+  llm_router_init
+
+  # Report each core backend.
+  _hc_lr_avail() { eval "printf '%s' \"\${_LLM_RT_${1}_avail:-0}\""; }
+  _hc_lr_ms()    { eval "printf '%s' \"\${_LLM_RT_${1}_ms:-99999}\""; }
+  _hc_lr_model() { eval "printf '%s' \"\${_LLM_RT_${1}_model:-}\""; }
+
+  for _backend in lmstudio ollama xai anthropic; do
+    _av="$(_hc_lr_avail "$_backend")"
+    _ms="$(_hc_lr_ms   "$_backend")"
+    _mo="$(_hc_lr_model "$_backend")"
+    if [ "$_av" = "1" ]; then
+      if [ -n "$_mo" ]; then
+        ok "${_backend}: up (${_ms}ms, model: ${_mo})"
+      else
+        ok "${_backend}: up (${_ms}ms)"
+      fi
+    else
+      case "$_backend" in
+        lmstudio) bad  "${_backend}: not responding (start LM Studio + Start Server)" ;;
+        ollama)   warn "${_backend}: not running (optional — \`ollama serve\`)" ;;
+        xai)
+          if [ -z "${XAI_API_KEY:-}" ]; then
+            warn "${_backend}: no XAI_API_KEY set (optional cloud backend)"
+          else
+            bad "${_backend}: unreachable (key set but endpoint failed)"
+          fi
+          ;;
+        anthropic)
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            warn "${_backend}: no ANTHROPIC_API_KEY set (optional cloud backend)"
+          else
+            bad "${_backend}: unreachable (key set but endpoint failed)"
+          fi
+          ;;
+      esac
+    fi
+  done
+
+  # Report auto-discovered Ollama models.
+  if command -v ollama >/dev/null 2>&1; then
+    _ollama_models="$(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}' | tr '\n' ' ' | sed 's/ $//')"
+    if [ -n "$_ollama_models" ]; then
+      _model_count="$(printf '%s' "$_ollama_models" | wc -w | tr -d ' ')"
+      ok "ollama: ${_model_count} model(s) discovered (${_ollama_models})"
+    else
+      warn "ollama: running but no models installed (\`ollama pull <model>\`)"
+    fi
+  else
+    warn "ollama CLI not on PATH — cannot auto-discover models"
+  fi
+
+  # Report routing policy status.
+  _policy_path="${ASHLR_LLM_ROUTING_POLICY:-${HOME}/.ashlr-workbench/llm-routing-policy.json}"
+  if [ -f "$_policy_path" ]; then
+    _agent_count="$(python3 -c "import json; d=json.load(open('$_policy_path')); print(len(d))" 2>/dev/null || echo 0)"
+    ok "routing policy: ${_agent_count} agent(s) configured (${_policy_path})"
+  else
+    warn "routing policy: no policy file yet (${_policy_path}) — run agents to populate"
+  fi
+
+  # Report active primary/fallback.
+  if [ -n "${LLM_PRIMARY_BACKEND:-}" ] && [ "${LLM_PRIMARY_BACKEND}" != "none" ]; then
+    ok "active primary: ${LLM_PRIMARY} (${LLM_PRIMARY_MS}ms)"
+  else
+    warn "active primary: none available"
+  fi
+  if [ -n "${LLM_FALLBACK_BACKEND:-}" ] && [ "${LLM_FALLBACK_BACKEND}" != "none" ]; then
+    ok "active fallback: ${LLM_FALLBACK} (${LLM_FALLBACK_MS}ms)"
+  else
+    warn "active fallback: none (single-backend mode)"
+  fi
+fi
+
 # ─── 4. OpenHands container ───────────────────────────────────────────────────
 section "OpenHands"
 if have docker && docker inspect "$OPENHANDS_CONTAINER" >/dev/null 2>&1; then

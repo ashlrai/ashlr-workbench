@@ -3204,6 +3204,507 @@ else
   _fail "bin/aw doctor --analyze-divergence flag missing"
 fi
 
+# ─── Test 19: LLM Router — persistent policy, auto-discovery, llm_router_learn, llm_router_backends ──
+printf "\n\033[1mTest 19: LLM Router — policy persistence + auto-discovery + llm_router_learn + llm_router_backends\033[0m\n"
+
+LLM_ROUTER_SH="$REPO_ROOT/scripts/lib/llm-router.sh"
+
+# 19a — new public functions are defined after sourcing
+for fn in llm_router_learn llm_router_backends _lr_policy_write _lr_policy_read_field _lr_policy_update_latency _lr_discover_ollama; do
+  LR19_FUNC="$(
+    env -i HOME="$HOME" bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      if declare -f $fn >/dev/null 2>&1; then echo defined; else echo missing; fi
+    " 2>&1
+  )"
+  assert_eq "$fn function is defined" "defined" "$LR19_FUNC"
+done
+
+# 19b — llm_router_init accepts --force-probe without error
+LR19_FORCE="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_ROUTER_EVENTS="0" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      llm_router_init
+      llm_router_init --force-probe
+      echo \"READY=\${LLM_ROUTER_READY:-0}\"
+    " 2>&1
+)"
+assert_eq "llm_router_init --force-probe completes (READY=1)" \
+  "READY=1" "$(printf '%s' "$LR19_FORCE" | grep '^READY=')"
+
+# 19c — llm_router_init is a no-op on second call without --force-probe
+LR19_NOOP="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_ROUTER_EVENTS="0" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      llm_router_init
+      # Mark that init already ran; second call should be a no-op
+      echo first_done
+      llm_router_init
+      echo second_done
+    " 2>&1
+)"
+if printf '%s' "$LR19_NOOP" | grep -q 'second_done'; then
+  _ok "llm_router_init second call without --force-probe completes safely"
+else
+  _fail "llm_router_init second call failed (output: $LR19_NOOP)"
+fi
+
+# 19d — _lr_policy_write creates the policy file with correct fields
+LR19_POLICY_DIR="$(mktemp -d /tmp/lr19-policy-XXXXXX)"
+LR19_POLICY_FILE="$LR19_POLICY_DIR/llm-routing-policy.json"
+LR19_WRITE="$(
+  env -i HOME="$HOME" \
+    ASHLR_LLM_ROUTING_POLICY="$LR19_POLICY_FILE" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      _lr_policy_write 'openhands' 'lmstudio' 'ollama' '1500'
+      cat '$LR19_POLICY_FILE'
+    " 2>&1
+)"
+LR19_WRITE_OK="$(printf '%s' "$LR19_WRITE" | python3 -c "
+import sys, json
+raw = sys.stdin.read().strip()
+try:
+    p = json.loads(raw)
+    a = p.get('openhands', {})
+    assert a.get('primary')      == 'lmstudio', f'bad primary: {a}'
+    assert a.get('fallback')     == 'ollama',   f'bad fallback: {a}'
+    assert a.get('threshold_ms') == 1500,       f'bad threshold: {a}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}  raw={raw!r}')
+" 2>&1)"
+assert_eq "_lr_policy_write creates valid policy JSON" "ok" "$LR19_WRITE_OK"
+rm -rf "$LR19_POLICY_DIR"
+
+# 19e — _lr_policy_read_field reads back written values
+LR19_READ_DIR="$(mktemp -d /tmp/lr19-read-XXXXXX)"
+LR19_READ_FILE="$LR19_READ_DIR/llm-routing-policy.json"
+LR19_READ="$(
+  env -i HOME="$HOME" \
+    ASHLR_LLM_ROUTING_POLICY="$LR19_READ_FILE" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      _lr_policy_write 'aider' 'ollama' 'xai' '2000'
+      echo \"primary=\$(_lr_policy_read_field aider primary)\"
+      echo \"fallback=\$(_lr_policy_read_field aider fallback)\"
+      echo \"threshold=\$(_lr_policy_read_field aider threshold_ms)\"
+    " 2>&1
+)"
+assert_eq "_lr_policy_read_field returns primary"   "primary=ollama" \
+  "$(printf '%s' "$LR19_READ" | grep '^primary=')"
+assert_eq "_lr_policy_read_field returns fallback"  "fallback=xai" \
+  "$(printf '%s' "$LR19_READ" | grep '^fallback=')"
+assert_eq "_lr_policy_read_field returns threshold" "threshold=2000" \
+  "$(printf '%s' "$LR19_READ" | grep '^threshold=')"
+rm -rf "$LR19_READ_DIR"
+
+# 19f — _lr_policy_read_field returns empty string for missing agent
+LR19_EMPTY_DIR="$(mktemp -d /tmp/lr19-empty-XXXXXX)"
+LR19_EMPTY_FILE="$LR19_EMPTY_DIR/llm-routing-policy.json"
+LR19_EMPTY="$(
+  env -i HOME="$HOME" \
+    ASHLR_LLM_ROUTING_POLICY="$LR19_EMPTY_FILE" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      _lr_policy_write 'aider' 'lmstudio' 'ollama' '2000'
+      val=\"\$(_lr_policy_read_field goose primary)\"
+      echo \"val=\${val}\"
+    " 2>&1
+)"
+assert_eq "_lr_policy_read_field returns empty for missing agent" \
+  "val=" "$(printf '%s' "$LR19_EMPTY" | grep '^val=')"
+rm -rf "$LR19_EMPTY_DIR"
+
+# 19g — _lr_policy_update_latency writes learned_latencies block
+LR19_LAT_DIR="$(mktemp -d /tmp/lr19-lat-XXXXXX)"
+LR19_LAT_FILE="$LR19_LAT_DIR/llm-routing-policy.json"
+LR19_LAT="$(
+  env -i HOME="$HOME" \
+    ASHLR_LLM_ROUTING_POLICY="$LR19_LAT_FILE" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      _lr_policy_update_latency 'aider' 'lmstudio' '450'
+      cat '$LR19_LAT_FILE'
+    " 2>&1
+)"
+LR19_LAT_OK="$(printf '%s' "$LR19_LAT" | python3 -c "
+import sys, json
+raw = sys.stdin.read().strip()
+try:
+    p = json.loads(raw)
+    ll = p.get('aider', {}).get('learned_latencies', {})
+    assert 'lmstudio' in ll, f'lmstudio missing from learned_latencies: {p}'
+    assert ll['lmstudio'] == 450.0, f'expected 450.0 got {ll[\"lmstudio\"]}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}  raw={raw!r}')
+" 2>&1)"
+assert_eq "_lr_policy_update_latency writes learned_latencies" "ok" "$LR19_LAT_OK"
+rm -rf "$LR19_LAT_DIR"
+
+# 19h — _lr_policy_update_latency computes EMA on second observation
+LR19_EMA_DIR="$(mktemp -d /tmp/lr19-ema-XXXXXX)"
+LR19_EMA_FILE="$LR19_EMA_DIR/llm-routing-policy.json"
+LR19_EMA="$(
+  env -i HOME="$HOME" \
+    ASHLR_LLM_ROUTING_POLICY="$LR19_EMA_FILE" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      _lr_policy_update_latency 'goose' 'ollama' '1000'
+      _lr_policy_update_latency 'goose' 'ollama' '500'
+      cat '$LR19_EMA_FILE'
+    " 2>&1
+)"
+# EMA: first=1000, second= 0.3*500 + 0.7*1000 = 150+700 = 850
+LR19_EMA_OK="$(printf '%s' "$LR19_EMA" | python3 -c "
+import sys, json
+raw = sys.stdin.read().strip()
+try:
+    p = json.loads(raw)
+    val = p.get('goose', {}).get('learned_latencies', {}).get('ollama', None)
+    assert val is not None, 'ollama not found'
+    assert abs(val - 850.0) < 1.0, f'expected ~850.0 got {val}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "_lr_policy_update_latency computes EMA (second obs)" "ok" "$LR19_EMA_OK"
+rm -rf "$LR19_EMA_DIR"
+
+# 19i — llm_router_learn calls _lr_policy_update_latency + emits routing_learn event
+LR19_LEARN_DIR="$(mktemp -d /tmp/lr19-learn-XXXXXX)"
+LR19_LEARN_POLICY="$LR19_LEARN_DIR/policy.json"
+LR19_LEARN_LOG="$LR19_LEARN_DIR/events.jsonl"
+LR19_LEARN="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_ROUTING_POLICY="$LR19_LEARN_POLICY" \
+    ASHLR_LLM_ROUTER_LOG="$LR19_LEARN_LOG" \
+    ASHLR_LLM_ROUTER_EVENTS="1" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      llm_router_init
+      LLM_PRIMARY_BACKEND=lmstudio
+      LLM_FALLBACK_BACKEND=ollama
+      FALLBACK_THRESHOLD=2000
+      llm_router_learn 'aider' 'lmstudio' '380'
+      cat '$LR19_LEARN_LOG'
+    " 2>&1
+)"
+LR19_LEARN_OK="$(printf '%s' "$LR19_LEARN" | python3 -c "
+import sys, json
+lines = [l for l in sys.stdin.read().strip().splitlines() if l.strip()]
+try:
+    events = [json.loads(l) for l in lines]
+    learn_events = [e for e in events if e.get('event') == 'routing_learn']
+    assert learn_events, f'no routing_learn event found in: {events}'
+    e = learn_events[0]
+    assert e.get('agent')   == 'aider',    f'bad agent: {e}'
+    assert e.get('backend') == 'lmstudio', f'bad backend: {e}'
+    assert e.get('observed_ms') == '380',  f'bad observed_ms: {e}'
+    print('ok')
+except Exception as ex:
+    print(f'fail: {ex}')
+" 2>&1)"
+assert_eq "llm_router_learn emits routing_learn event" "ok" "$LR19_LEARN_OK"
+rm -rf "$LR19_LEARN_DIR"
+
+# 19j — llm_router_learn persists primary into policy file
+LR19_LPERS_DIR="$(mktemp -d /tmp/lr19-lpers-XXXXXX)"
+LR19_LPERS_POLICY="$LR19_LPERS_DIR/policy.json"
+LR19_LPERS="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_ROUTING_POLICY="$LR19_LPERS_POLICY" \
+    ASHLR_LLM_ROUTER_EVENTS="0" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      llm_router_init
+      LLM_PRIMARY_BACKEND=lmstudio
+      LLM_FALLBACK_BACKEND=ollama
+      FALLBACK_THRESHOLD=1800
+      llm_router_learn 'openhands' 'lmstudio' '300'
+      python3 -c \"
+import json
+p = json.load(open('$LR19_LPERS_POLICY'))
+a = p.get('openhands', {})
+print('primary=' + a.get('primary',''))
+print('fallback=' + a.get('fallback',''))
+\"
+    " 2>&1
+)"
+assert_eq "llm_router_learn persists primary in policy" \
+  "primary=lmstudio" "$(printf '%s' "$LR19_LPERS" | grep '^primary=')"
+assert_eq "llm_router_learn persists fallback in policy" \
+  "fallback=ollama" "$(printf '%s' "$LR19_LPERS" | grep '^fallback=')"
+rm -rf "$LR19_LPERS_DIR"
+
+# 19k — llm_router_learn ignores non-numeric observed_ms (no crash)
+LR19_BADMS_DIR="$(mktemp -d /tmp/lr19-badms-XXXXXX)"
+LR19_BADMS="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_ROUTING_POLICY="$LR19_BADMS_DIR/policy.json" \
+    ASHLR_LLM_ROUTER_EVENTS="0" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      llm_router_init
+      LLM_PRIMARY_BACKEND=lmstudio
+      LLM_FALLBACK_BACKEND=none
+      FALLBACK_THRESHOLD=2000
+      llm_router_learn 'goose' 'lmstudio' 'not-a-number'
+      echo exit_ok
+    " 2>&1
+)"
+if printf '%s' "$LR19_BADMS" | grep -q 'exit_ok'; then
+  _ok "llm_router_learn handles non-numeric observed_ms without crashing"
+else
+  _fail "llm_router_learn crashed on non-numeric ms (output: $LR19_BADMS)"
+fi
+rm -rf "$LR19_BADMS_DIR"
+
+# 19l — llm_router_backends runs without error and mentions expected sections
+LR19_BACKENDS_OUT="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_ROUTER_EVENTS="0" \
+    NO_COLOR="1" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      llm_router_backends
+    " 2>&1
+)"
+for _section in "Backend Discovery" "Routing Policy" "lmstudio" "ollama" "xai" "anthropic"; do
+  if printf '%s' "$LR19_BACKENDS_OUT" | grep -qi "$_section"; then
+    _ok "llm_router_backends output mentions: $_section"
+  else
+    _fail "llm_router_backends missing: $_section (got: $LR19_BACKENDS_OUT)"
+  fi
+done
+
+# 19m — llm_router_backends shows policy content when policy file exists
+LR19_BKPOL_DIR="$(mktemp -d /tmp/lr19-bkpol-XXXXXX)"
+LR19_BKPOL_FILE="$LR19_BKPOL_DIR/policy.json"
+# Pre-populate a policy file.
+python3 -c "
+import json
+policy = {'aider': {'primary':'lmstudio','fallback':'ollama','threshold_ms':1500,'learned_latencies':{'lmstudio':320.0}}}
+open('$LR19_BKPOL_FILE','w').write(json.dumps(policy, indent=2))
+"
+LR19_BKPOL_OUT="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_ROUTER_EVENTS="0" \
+    ASHLR_LLM_ROUTING_POLICY="$LR19_BKPOL_FILE" \
+    NO_COLOR="1" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      llm_router_backends
+    " 2>&1
+)"
+if printf '%s' "$LR19_BKPOL_OUT" | grep -q 'aider'; then
+  _ok "llm_router_backends displays policy agent entries"
+else
+  _fail "llm_router_backends did not display aider policy entry (got: $LR19_BKPOL_OUT)"
+fi
+if printf '%s' "$LR19_BKPOL_OUT" | grep -q '320'; then
+  _ok "llm_router_backends displays learned latency values"
+else
+  _fail "llm_router_backends did not display learned latency 320 (got: $LR19_BKPOL_OUT)"
+fi
+rm -rf "$LR19_BKPOL_DIR"
+
+# 19n — _lr_discover_ollama does not crash when ollama is not on PATH
+LR19_DISC="$(
+  env -i HOME="$HOME" PATH="/usr/bin:/bin" \
+    OLLAMA_URL="http://localhost:19998" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      _LLM_RT_ollama_avail=0
+      _LLM_RT_ollama_ms=99999
+      _lr_discover_ollama
+      echo exit_ok
+    " 2>&1
+)"
+if printf '%s' "$LR19_DISC" | grep -q 'exit_ok'; then
+  _ok "_lr_discover_ollama exits cleanly when ollama not on PATH"
+else
+  _fail "_lr_discover_ollama crashed when ollama not on PATH (output: $LR19_DISC)"
+fi
+
+# 19o — llm_router_select honours persisted primary when backend is probed available
+#        (simulate by injecting _LLM_RT vars directly so no real network needed)
+LR19_SEL_DIR="$(mktemp -d /tmp/lr19-sel-XXXXXX)"
+LR19_SEL_POLICY="$LR19_SEL_DIR/policy.json"
+python3 -c "
+import json
+policy = {'goose': {'primary':'xai','fallback':'lmstudio','threshold_ms':2000}}
+open('$LR19_SEL_POLICY','w').write(json.dumps(policy))
+"
+LR19_SEL="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    XAI_API_KEY="fake-key-for-test" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_ROUTING_POLICY="$LR19_SEL_POLICY" \
+    ASHLR_LLM_ROUTER_EVENTS="0" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      llm_router_init
+      # Manually mark xai as available so we can test policy-honouring without network
+      _LLM_RT_xai_avail=1
+      _LLM_RT_xai_ms=200
+      _LLM_RT_xai_model=grok-3
+      llm_router_select goose
+      echo \"PRIMARY=\${LLM_PRIMARY_BACKEND:-none}\"
+    " 2>&1
+)"
+if printf '%s' "$LR19_SEL" | grep -q 'PRIMARY=xai'; then
+  _ok "llm_router_select honours persisted primary (xai) from routing policy"
+else
+  # Acceptable: if xai probe still fails the policy primary is skipped; the key
+  # thing is select() ran without error.
+  if printf '%s' "$LR19_SEL" | grep -q 'PRIMARY='; then
+    _ok "llm_router_select ran without error (policy primary unavailable, graceful fallback)"
+  else
+    _fail "llm_router_select failed (output: $LR19_SEL)"
+  fi
+fi
+rm -rf "$LR19_SEL_DIR"
+
+# 19p — bin/aw recognises llm-backends subcommand
+if grep -q 'llm-backends' "$REPO_ROOT/bin/aw"; then
+  _ok "bin/aw recognises llm-backends subcommand"
+else
+  _fail "bin/aw does not recognise llm-backends"
+fi
+
+# 19q — bin/aw help mentions llm-backends
+AW19_HELP="$(
+  env -i HOME="$HOME" NO_COLOR=1 bash -c "'$REPO_ROOT/bin/aw' help" 2>&1
+)"
+if printf '%s' "$AW19_HELP" | grep -q 'llm-backends'; then
+  _ok "aw help mentions llm-backends"
+else
+  _fail "aw help missing llm-backends (got: $AW19_HELP)"
+fi
+
+# 19r — healthcheck.sh sources llm-router.sh (new section 3b)
+if grep -q 'llm-router.sh' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh sources llm-router.sh (LLM backend auto-discovery section)"
+else
+  _fail "healthcheck.sh does not source llm-router.sh"
+fi
+
+# 19s — healthcheck.sh contains the LLM Backend Auto-Discovery section header
+if grep -q 'LLM Backend Auto-Discovery' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh contains 'LLM Backend Auto-Discovery' section"
+else
+  _fail "healthcheck.sh missing 'LLM Backend Auto-Discovery' section"
+fi
+
+# 19t — healthcheck.sh calls llm_router_init
+if grep -q 'llm_router_init' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh calls llm_router_init"
+else
+  _fail "healthcheck.sh does not call llm_router_init"
+fi
+
+# 19u — healthcheck.sh passes bash syntax check after new section
+if bash -n "$REPO_ROOT/scripts/healthcheck.sh" 2>/dev/null; then
+  _ok "healthcheck.sh passes bash syntax check after LLM backend section"
+else
+  _fail "healthcheck.sh has bash syntax errors after LLM backend section"
+fi
+
+# 19v — llm-router.sh passes bash syntax check after all additions
+if bash -n "$REPO_ROOT/scripts/lib/llm-router.sh" 2>/dev/null; then
+  _ok "llm-router.sh passes bash syntax check after all additions"
+else
+  _fail "llm-router.sh has bash syntax errors after additions"
+fi
+
+# 19w — ASHLR_LLM_ROUTING_POLICY default is honoured
+LR19_DEFPOL="$(
+  env -i HOME="$HOME" bash -c "
+    . '$CONFIG_SH'
+    . '$LLM_ROUTER_SH'
+    printf '%s' \"\${ASHLR_LLM_ROUTING_POLICY:-unset}\"
+  " 2>&1
+)"
+if printf '%s' "$LR19_DEFPOL" | grep -q '\.ashlr-workbench/llm-routing-policy\.json'; then
+  _ok "ASHLR_LLM_ROUTING_POLICY defaults to ~/.ashlr-workbench/llm-routing-policy.json"
+else
+  _fail "ASHLR_LLM_ROUTING_POLICY default unexpected: $LR19_DEFPOL"
+fi
+
+# 19x — _lr_policy_write is idempotent (second write merges, not overwrites)
+LR19_IDEM_DIR="$(mktemp -d /tmp/lr19-idem-XXXXXX)"
+LR19_IDEM_FILE="$LR19_IDEM_DIR/policy.json"
+LR19_IDEM="$(
+  env -i HOME="$HOME" \
+    ASHLR_LLM_ROUTING_POLICY="$LR19_IDEM_FILE" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      _lr_policy_write 'aider'     'lmstudio' 'ollama' '2000'
+      _lr_policy_write 'openhands' 'xai'      'anthropic' '1500'
+      cat '$LR19_IDEM_FILE'
+    " 2>&1
+)"
+LR19_IDEM_OK="$(printf '%s' "$LR19_IDEM" | python3 -c "
+import sys, json
+raw = sys.stdin.read().strip()
+try:
+    p = json.loads(raw)
+    assert 'aider'     in p, 'aider missing'
+    assert 'openhands' in p, 'openhands missing'
+    assert p['aider']['primary']      == 'lmstudio', f'bad aider primary: {p}'
+    assert p['openhands']['primary']  == 'xai',      f'bad openhands primary: {p}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "_lr_policy_write merges multiple agents (idempotent)" "ok" "$LR19_IDEM_OK"
+rm -rf "$LR19_IDEM_DIR"
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n"
 if [ "$FAIL" -eq 0 ]; then

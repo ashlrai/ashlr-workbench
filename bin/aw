@@ -293,6 +293,21 @@ cmd_llm_status() {
   llm_router_status
 }
 
+# ─── llm-backends ─────────────────────────────────────────────────────────────
+cmd_llm_backends() {
+  local lib="$SCRIPTS_DIR/lib/llm-router.sh"
+  if [ ! -f "$lib" ]; then
+    bad "llm-router.sh not found at $lib"
+    exit 1
+  fi
+  # Source config + router, then show the backends + policy display.
+  # shellcheck source=scripts/lib/config.sh
+  . "$SCRIPTS_DIR/lib/config.sh"
+  # shellcheck source=scripts/lib/llm-router.sh
+  . "$lib"
+  llm_router_backends "$@"
+}
+
 # ─── monitor ──────────────────────────────────────────────────────────────────
 cmd_monitor() {
   local subcmd="${1:-status}"
@@ -474,6 +489,7 @@ ${C_BOLD}COMMANDS${C_RESET}
   ${C_CYAN}resume${C_RESET}          resume where you left off (restores last session context)
   ${C_CYAN}summary${C_RESET}         summarize the most recent session
   ${C_CYAN}llm-status${C_RESET}      probe all LLM endpoints and show latency matrix
+  ${C_CYAN}llm-backends${C_RESET}   show discovered backends, health, and routing policy (--watch for live)
   ${C_CYAN}monitor${C_RESET} <sub>   agent auto-restart daemon (start|stop|status)
   ${C_CYAN}replay${C_RESET} <sub>    session replay & divergence detector (list|compare|diff|export|analyze-divergence)
   ${C_CYAN}help${C_RESET}            show this message
@@ -505,7 +521,7 @@ KNOWN_SUBCOMMANDS="start|stop|status|st|health|healthcheck|update|upgrade|doctor
 
 is_known_subcommand() {
   case "$1" in
-    start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|resume|summary|auto|llm-status|monitor|replay|help) return 0 ;;
+    start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|resume|summary|auto|llm-status|llm-backends|monitor|replay|help) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -571,8 +587,9 @@ case "$cmd" in
   mode)               exec "$SCRIPTS_DIR/mode-switch.sh" "$@" ;;
   resume)             exec "$SCRIPTS_DIR/session-resume.sh" "$@" ;;
   summary)            exec "$SCRIPTS_DIR/session-summary.sh" "$@" ;;
-  llm-status)         cmd_llm_status "$@" ;;
-  monitor)            cmd_monitor    "$@" ;;
+  llm-status)         cmd_llm_status    "$@" ;;
+  llm-backends)       cmd_llm_backends  "$@" ;;
+  monitor)            cmd_monitor       "$@" ;;
   replay)
     local replay_script="$SCRIPTS_DIR/session-replay.sh"
     if [ ! -x "$replay_script" ]; then
