@@ -1915,6 +1915,220 @@ else
   _fail ".git/hooks/pre-commit exited $PRECOMMIT_RC with SKIP_CONFIG_AUDIT=1"
 fi
 
+# ─── Test 15: gen-tool-matrix.sh ─────────────────────────────────────────────
+printf "\n\033[1mTest 15: gen-tool-matrix.sh\033[0m\n"
+
+MATRIX_SH="$REPO_ROOT/scripts/gen-tool-matrix.sh"
+
+# 15a — file exists and is executable
+assert_file_executable "gen-tool-matrix.sh is executable" "$MATRIX_SH"
+
+# 15b — bash syntax check (bash -n)
+if bash -n "$MATRIX_SH" 2>/dev/null; then
+  _ok "gen-tool-matrix.sh passes bash syntax check"
+else
+  _fail "gen-tool-matrix.sh has bash syntax errors"
+fi
+
+# 15c — --help flag exits 0 and prints usage
+MATRIX_HELP="$(bash "$MATRIX_SH" --help 2>&1)"
+MATRIX_HELP_RC=$?
+if [ "$MATRIX_HELP_RC" -eq 0 ]; then
+  _ok "gen-tool-matrix.sh --help exits 0"
+else
+  _fail "gen-tool-matrix.sh --help exited $MATRIX_HELP_RC"
+fi
+if printf '%s' "$MATRIX_HELP" | grep -q 'health-embed'; then
+  _ok "gen-tool-matrix.sh --help documents --health-embed flag"
+else
+  _fail "gen-tool-matrix.sh --help missing --health-embed (got: $MATRIX_HELP)"
+fi
+
+# 15d — unknown flag exits non-zero
+MATRIX_BAD_RC=0
+bash "$MATRIX_SH" --no-such-flag >/dev/null 2>&1 || MATRIX_BAD_RC=$?
+if [ "$MATRIX_BAD_RC" -ne 0 ]; then
+  _ok "gen-tool-matrix.sh exits non-zero for unknown flag"
+else
+  _fail "gen-tool-matrix.sh should exit non-zero for unknown flag"
+fi
+
+# 15e — full generation produces HTML + MD files and exits 0
+MATRIX_TMPDIR="$(mktemp -d /tmp/matrix-test-XXXXXX)"
+MATRIX_GEN_OUT="$(
+  env -i HOME="$HOME" PATH="$PATH" \
+    ASHLR_PLUGIN_DIR="/tmp/nonexistent-plugin-$$" \
+    MATRIX_CACHE_DIR="$MATRIX_TMPDIR/cache" \
+    NO_COLOR=1 \
+    bash "$MATRIX_SH" 2>&1
+)"
+MATRIX_GEN_RC=$?
+if [ "$MATRIX_GEN_RC" -eq 0 ]; then
+  _ok "gen-tool-matrix.sh (full mode, no plugin) exits 0"
+else
+  _fail "gen-tool-matrix.sh exited $MATRIX_GEN_RC (output: $(printf '%s' "$MATRIX_GEN_OUT" | head -5))"
+fi
+
+# 15f — HTML output file was created
+if [ -f "$REPO_ROOT/docs/generated/tool-matrix.html" ]; then
+  _ok "docs/generated/tool-matrix.html was created"
+else
+  _fail "docs/generated/tool-matrix.html was not created"
+fi
+
+# 15g — HTML file contains expected structural elements
+if [ -f "$REPO_ROOT/docs/generated/tool-matrix.html" ]; then
+  HTML_CONTENT="$(cat "$REPO_ROOT/docs/generated/tool-matrix.html")"
+  if printf '%s' "$HTML_CONTENT" | grep -q 'MCP Capability Matrix'; then
+    _ok "tool-matrix.html contains matrix title"
+  else
+    _fail "tool-matrix.html missing matrix title"
+  fi
+  if printf '%s' "$HTML_CONTENT" | grep -q 'ashlr-efficiency'; then
+    _ok "tool-matrix.html references ashlr-efficiency server"
+  else
+    _fail "tool-matrix.html missing ashlr-efficiency entry"
+  fi
+  if printf '%s' "$HTML_CONTENT" | grep -q 'ashlrcode'; then
+    _ok "tool-matrix.html references ashlrcode agent"
+  else
+    _fail "tool-matrix.html missing ashlrcode agent"
+  fi
+fi
+
+# 15h — Markdown inventory file was created
+if [ -f "$REPO_ROOT/docs/TOOL-INVENTORY.md" ]; then
+  _ok "docs/TOOL-INVENTORY.md was created"
+else
+  _fail "docs/TOOL-INVENTORY.md was not created"
+fi
+
+# 15i — Markdown file contains expected content
+if [ -f "$REPO_ROOT/docs/TOOL-INVENTORY.md" ]; then
+  MD_CONTENT="$(cat "$REPO_ROOT/docs/TOOL-INVENTORY.md")"
+  if printf '%s' "$MD_CONTENT" | grep -q '# Tool Inventory'; then
+    _ok "TOOL-INVENTORY.md has correct heading"
+  else
+    _fail "TOOL-INVENTORY.md missing '# Tool Inventory' heading"
+  fi
+  if printf '%s' "$MD_CONTENT" | grep -q 'ashlr-bash'; then
+    _ok "TOOL-INVENTORY.md lists ashlr-bash server"
+  else
+    _fail "TOOL-INVENTORY.md missing ashlr-bash server"
+  fi
+  if printf '%s' "$MD_CONTENT" | grep -q 'Cross-Reference Matrix'; then
+    _ok "TOOL-INVENTORY.md contains cross-reference matrix section"
+  else
+    _fail "TOOL-INVENTORY.md missing cross-reference matrix section"
+  fi
+fi
+
+# 15j — --diff-only exits 0 and produces output (even on first run / missing snapshot)
+MATRIX_DIFF_OUT="$(
+  env -i HOME="$HOME" PATH="$PATH" \
+    ASHLR_PLUGIN_DIR="/tmp/nonexistent-plugin-$$" \
+    MATRIX_CACHE_DIR="$MATRIX_TMPDIR/cache2" \
+    NO_COLOR=1 \
+    bash "$MATRIX_SH" --diff-only 2>&1
+)"
+MATRIX_DIFF_RC=$?
+if [ "$MATRIX_DIFF_RC" -eq 0 ]; then
+  _ok "gen-tool-matrix.sh --diff-only exits 0"
+else
+  _fail "gen-tool-matrix.sh --diff-only exited $MATRIX_DIFF_RC"
+fi
+if [ -n "$MATRIX_DIFF_OUT" ]; then
+  _ok "gen-tool-matrix.sh --diff-only produces output"
+else
+  _fail "gen-tool-matrix.sh --diff-only produced no output"
+fi
+
+# 15k — --health-embed exits 0 and produces summary line
+MATRIX_HE_OUT="$(
+  env -i HOME="$HOME" PATH="$PATH" \
+    ASHLR_PLUGIN_DIR="/tmp/nonexistent-plugin-$$" \
+    MATRIX_CACHE_DIR="$MATRIX_TMPDIR/cache3" \
+    NO_COLOR=1 \
+    bash "$MATRIX_SH" --health-embed 2>&1
+)"
+MATRIX_HE_RC=$?
+if [ "$MATRIX_HE_RC" -eq 0 ]; then
+  _ok "gen-tool-matrix.sh --health-embed exits 0"
+else
+  _fail "gen-tool-matrix.sh --health-embed exited $MATRIX_HE_RC"
+fi
+if printf '%s' "$MATRIX_HE_OUT" | grep -qi 'Tool Matrix'; then
+  _ok "gen-tool-matrix.sh --health-embed summary mentions 'Tool Matrix'"
+else
+  _fail "gen-tool-matrix.sh --health-embed missing summary line (got: $(printf '%s' "$MATRIX_HE_OUT" | head -3))"
+fi
+
+# 15l — --health-embed output includes server count
+if printf '%s' "$MATRIX_HE_OUT" | grep -qE '[0-9]+ servers'; then
+  _ok "gen-tool-matrix.sh --health-embed reports server count"
+else
+  _fail "gen-tool-matrix.sh --health-embed missing server count"
+fi
+
+# 15m — snapshot file is written to cache dir
+MATRIX_SNAP_DIR="$(mktemp -d /tmp/matrix-snap-XXXXXX)"
+env -i HOME="$HOME" PATH="$PATH" \
+  ASHLR_PLUGIN_DIR="/tmp/nonexistent-plugin-$$" \
+  MATRIX_CACHE_DIR="$MATRIX_SNAP_DIR" \
+  NO_COLOR=1 \
+  bash "$MATRIX_SH" >/dev/null 2>&1 || true
+if [ -f "$MATRIX_SNAP_DIR/last-snapshot.txt" ]; then
+  _ok "gen-tool-matrix.sh writes last-snapshot.txt to MATRIX_CACHE_DIR"
+else
+  _fail "gen-tool-matrix.sh did not create last-snapshot.txt in MATRIX_CACHE_DIR"
+fi
+
+# 15n — snapshot file contains server entries
+if [ -f "$MATRIX_SNAP_DIR/last-snapshot.txt" ]; then
+  if grep -q '^efficiency=' "$MATRIX_SNAP_DIR/last-snapshot.txt"; then
+    _ok "last-snapshot.txt contains efficiency= entry"
+  else
+    _fail "last-snapshot.txt missing efficiency= entry (content: $(cat "$MATRIX_SNAP_DIR/last-snapshot.txt" | head -5))"
+  fi
+fi
+
+# 15o — diff detects a tool addition between two runs
+MATRIX_DIFF_DIR="$(mktemp -d /tmp/matrix-diff-XXXXXX)"
+# Write a fake previous snapshot missing a tool
+mkdir -p "$MATRIX_DIFF_DIR"
+printf '# snapshot\nefficiency=ashlr__read ashlr__grep\n' > "$MATRIX_DIFF_DIR/last-snapshot.txt"
+MATRIX_CHANGE_OUT="$(
+  env -i HOME="$HOME" PATH="$PATH" \
+    ASHLR_PLUGIN_DIR="/tmp/nonexistent-plugin-$$" \
+    MATRIX_CACHE_DIR="$MATRIX_DIFF_DIR" \
+    NO_COLOR=1 \
+    bash "$MATRIX_SH" --diff-only 2>&1
+)"
+# The static registry has more tools for efficiency than just ashlr__read ashlr__grep
+# so there should be additions detected (ashlr__glob, ashlr__savings, ashlr__flush)
+if printf '%s' "$MATRIX_CHANGE_OUT" | grep -q '+'; then
+  _ok "gen-tool-matrix.sh --diff-only detects added tools vs. stale snapshot"
+else
+  _fail "gen-tool-matrix.sh --diff-only did not detect tool additions (got: $MATRIX_CHANGE_OUT)"
+fi
+
+# 15p — healthcheck.sh sources gen-tool-matrix.sh
+if grep -q 'gen-tool-matrix.sh' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh references gen-tool-matrix.sh"
+else
+  _fail "healthcheck.sh does not reference gen-tool-matrix.sh"
+fi
+
+# 15q — healthcheck.sh has Tool Matrix section
+if grep -q 'Tool Matrix' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh has Tool Matrix section"
+else
+  _fail "healthcheck.sh missing Tool Matrix section"
+fi
+
+# Cleanup temp dirs
+rm -rf "$MATRIX_TMPDIR" "$MATRIX_SNAP_DIR" "$MATRIX_DIFF_DIR"
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n"
 if [ "$FAIL" -eq 0 ]; then

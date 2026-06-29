@@ -280,6 +280,39 @@ else
   fi
 fi
 
+# ─── 12. Tool Matrix (cached, non-blocking) ───────────────────────────────────
+# Runs gen-tool-matrix.sh with --health-embed to produce a quick survey of the
+# MCP tool surface and embed a one-line summary here.  The script uses a cache
+# at ~/.cache/ashlr-workbench/matrix so it only re-probes when the plugin
+# changes; passing --health-embed skips full HTML/MD regeneration and just
+# prints the summary line.
+section "Tool Matrix"
+
+_MATRIX_SCRIPT="$SCRIPT_DIR/gen-tool-matrix.sh"
+if [ ! -f "$_MATRIX_SCRIPT" ]; then
+  warn "gen-tool-matrix.sh not found at $_MATRIX_SCRIPT"
+elif [ ! -x "$_MATRIX_SCRIPT" ]; then
+  warn "gen-tool-matrix.sh not executable — run: chmod +x $_MATRIX_SCRIPT"
+else
+  # Run with NO_COLOR so the summary line is parseable; capture output.
+  _MATRIX_OUTPUT="$(
+    NO_COLOR=1 \
+    ASHLR_PLUGIN_DIR="${ASHLR_PLUGIN_DIR:-$HOME/Desktop/ashlr-plugin}" \
+    bash "$_MATRIX_SCRIPT" --health-embed 2>/dev/null
+  )" || true
+
+  if [ -n "$_MATRIX_OUTPUT" ]; then
+    # Print each output line indented under the section.
+    printf '%s\n' "$_MATRIX_OUTPUT" | while IFS= read -r _mline; do
+      printf "  %s\n" "$_mline"
+    done
+    # Count this as a pass if summary line was produced.
+    ok "Tool matrix generated"
+  else
+    warn "Tool matrix: gen-tool-matrix.sh produced no output (run manually to debug)"
+  fi
+fi
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n%sResult:%s %s%d passed%s, %s%d warnings%s, %s%d failed%s\n" \
   "$C_BOLD" "$C_RESET" \

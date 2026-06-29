@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ashlr-workbench MCP Capability Matrix</title>
+  <style>
+    :root {
+      --bg: #1e1e1e; --surface: #252526; --border: #3c3c3c;
+      --text: #d4d4d4; --dim: #858585; --green: #4ec9b0;
+      --yellow: #dcdcaa; --red: #f48771; --blue: #9cdcfe;
+      --live: #4ec9b0; --static: #dcdcaa; --skip: #3c3c3c; --fail: #f48771;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 13px; padding: 24px; }
+    h1 { color: var(--blue); font-size: 18px; margin-bottom: 4px; }
+    .meta { color: var(--dim); font-size: 11px; margin-bottom: 24px; }
+    .stats { display: flex; gap: 24px; margin-bottom: 24px; flex-wrap: wrap; }
+    .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 10px 16px; }
+    .stat-val { font-size: 24px; font-weight: bold; color: var(--green); }
+    .stat-lbl { color: var(--dim); font-size: 11px; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 32px; }
+    th { background: var(--surface); color: var(--blue); padding: 8px 12px; text-align: left; border: 1px solid var(--border); font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; }
+    td { padding: 6px 12px; border: 1px solid var(--border); vertical-align: top; font-size: 12px; }
+    tr:hover td { background: rgba(255,255,255,0.03); }
+    .srv-cell { color: var(--yellow); font-weight: bold; white-space: nowrap; }
+    .agent-hdr { color: var(--green); }
+    .cell-live    { background: rgba(78,201,176,0.12); }
+    .cell-static  { background: rgba(220,220,170,0.10); }
+    .cell-skip    { color: var(--dim); background: var(--skip); text-align: center; }
+    .cell-unavail { color: var(--dim); background: rgba(244,135,113,0.08); }
+    .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; margin-right: 4px; }
+    .badge-live   { background: rgba(78,201,176,0.25); color: var(--live); }
+    .badge-static { background: rgba(220,220,170,0.2); color: var(--yellow); }
+    .badge-unavail{ background: rgba(244,135,113,0.2); color: var(--red); }
+    .tool-list { margin-top: 4px; }
+    .tool { display: inline-block; background: rgba(150,150,200,0.15); border-radius: 2px; padding: 0 4px; margin: 1px 2px 1px 0; font-size: 10px; color: var(--text); }
+    .latency { color: var(--dim); font-size: 10px; }
+    .section-hdr { color: var(--blue); font-size: 15px; margin: 24px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+    .desc { color: var(--dim); font-size: 11px; margin-top: 2px; }
+    .srv-name { color: var(--yellow); }
+    code { font-family: inherit; }
+    .legend { font-size: 11px; color: var(--dim); margin-bottom: 16px; }
+    .legend span { display: inline-block; margin-right: 16px; }
+    .dot-live   { color: var(--live);   }
+    .dot-static { color: var(--yellow); }
+    .dot-skip   { color: var(--dim);    }
+  </style>
+</head>
+<body>
+  <h1>ashlr-workbench MCP Capability Matrix</h1>
+  <div class="meta">Generated: 2026-06-29T06:43:32Z &nbsp;·&nbsp; Source: <code>scripts/gen-tool-matrix.sh</code></div>
+  <div class="stats">
+    <div class="stat"><div class="stat-val">4</div><div class="stat-lbl">Agents</div></div>
+    <div class="stat"><div class="stat-val">10</div><div class="stat-lbl">MCP Servers</div></div>
+    <div class="stat"><div class="stat-val">29</div><div class="stat-lbl">Total Tools</div></div>
+    <div class="stat"><div class="stat-val">0/10</div><div class="stat-lbl">Live Probed</div></div>
+  </div>
+  <div class="legend">
+    <span><span class="dot-live">✓</span> live — probed via JSON-RPC tools/list</span>
+    <span><span class="dot-static">◌</span> static — from registry (plugin not probed)</span>
+    <span><span class="dot-skip">—</span> not loaded by this agent</span>
+  </div>
+  <h2 class="section-hdr">Agent × MCP Server Matrix</h2>
+  <table>
+    <thead><tr>
+      <th>MCP Server</th>
+      <th class="agent-hdr">aider</th>
+      <th class="agent-hdr">goose</th>
+      <th class="agent-hdr">ashlrcode</th>
+      <th class="agent-hdr">openhands</th>
+    </tr></thead>
+    <tbody>
+    <tr>
+      <td class="srv-cell"><code>ashlr-efficiency</code><span class="badge badge-unavail">unavail</span><div class="desc">Token-efficient Read/Grep/Edit and session savings reporter</div></td>
+      <td class="cell-skip">—</td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__read</span><span class="tool">ashlr__grep</span><span class="tool">ashlr__glob</span><span class="tool">ashlr__savings</span><span class="tool">ashlr__flush</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__read</span><span class="tool">ashlr__grep</span><span class="tool">ashlr__glob</span><span class="tool">ashlr__savings</span><span class="tool">ashlr__flush</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__read</span><span class="tool">ashlr__grep</span><span class="tool">ashlr__glob</span><span class="tool">ashlr__savings</span><span class="tool">ashlr__flush</span></div></td>
+    </tr>
+    <tr>
+      <td class="srv-cell"><code>ashlr-sql</code><span class="badge badge-unavail">unavail</span><div class="desc">Read-only SQL query tool for SQLite/Postgres/MySQL</div></td>
+      <td class="cell-skip">—</td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__sql</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__sql</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__sql</span></div></td>
+    </tr>
+    <tr>
+      <td class="srv-cell"><code>ashlr-bash</code><span class="badge badge-unavail">unavail</span><div class="desc">Sandboxed bash with background-process support</div></td>
+      <td class="cell-skip">—</td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__bash</span><span class="tool">ashlr__bash_start</span><span class="tool">ashlr__bash_tail</span><span class="tool">ashlr__bash_stop</span><span class="tool">ashlr__bash_list</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__bash</span><span class="tool">ashlr__bash_start</span><span class="tool">ashlr__bash_tail</span><span class="tool">ashlr__bash_stop</span><span class="tool">ashlr__bash_list</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__bash</span><span class="tool">ashlr__bash_start</span><span class="tool">ashlr__bash_tail</span><span class="tool">ashlr__bash_stop</span><span class="tool">ashlr__bash_list</span></div></td>
+    </tr>
+    <tr>
+      <td class="srv-cell"><code>ashlr-tree</code><span class="badge badge-unavail">unavail</span><div class="desc">Directory tree listing with smart depth limits</div></td>
+      <td class="cell-skip">—</td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__tree</span><span class="tool">ashlr__ls</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__tree</span><span class="tool">ashlr__ls</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__tree</span><span class="tool">ashlr__ls</span></div></td>
+    </tr>
+    <tr>
+      <td class="srv-cell"><code>ashlr-http</code><span class="badge badge-unavail">unavail</span><div class="desc">HTTP fetch with response summarization</div></td>
+      <td class="cell-skip">—</td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__http</span><span class="tool">ashlr__webfetch</span><span class="tool">ashlr__websearch</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__http</span><span class="tool">ashlr__webfetch</span><span class="tool">ashlr__websearch</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__http</span><span class="tool">ashlr__webfetch</span><span class="tool">ashlr__websearch</span></div></td>
+    </tr>
+    <tr>
+      <td class="srv-cell"><code>ashlr-diff</code><span class="badge badge-unavail">unavail</span><div class="desc">Compact unified diffs between files, commits, or strings</div></td>
+      <td class="cell-skip">—</td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__diff</span><span class="tool">ashlr__diff_semantic</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__diff</span><span class="tool">ashlr__diff_semantic</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__diff</span><span class="tool">ashlr__diff_semantic</span></div></td>
+    </tr>
+    <tr>
+      <td class="srv-cell"><code>ashlr-logs</code><span class="badge badge-unavail">unavail</span><div class="desc">Log tail/grep with intelligent truncation</div></td>
+      <td class="cell-skip">—</td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__logs</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__logs</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__logs</span></div></td>
+    </tr>
+    <tr>
+      <td class="srv-cell"><code>ashlr-genome</code><span class="badge badge-unavail">unavail</span><div class="desc">Genome-RAG codebase index (propose/consolidate/status)</div></td>
+      <td class="cell-skip">—</td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__genome_propose</span><span class="tool">ashlr__genome_consolidate</span><span class="tool">ashlr__genome_status</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__genome_propose</span><span class="tool">ashlr__genome_consolidate</span><span class="tool">ashlr__genome_status</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__genome_propose</span><span class="tool">ashlr__genome_consolidate</span><span class="tool">ashlr__genome_status</span></div></td>
+    </tr>
+    <tr>
+      <td class="srv-cell"><code>ashlr-orient</code><span class="badge badge-unavail">unavail</span><div class="desc">Fast 'what is this repo' orientation summary</div></td>
+      <td class="cell-skip">—</td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__orient</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__orient</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__orient</span></div></td>
+    </tr>
+    <tr>
+      <td class="srv-cell"><code>ashlr-github</code><span class="badge badge-unavail">unavail</span><div class="desc">Compact GitHub PR + issue reader</div></td>
+      <td class="cell-skip">—</td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__pr</span><span class="tool">ashlr__pr_comment</span><span class="tool">ashlr__pr_approve</span><span class="tool">ashlr__issue</span><span class="tool">ashlr__issue_create</span><span class="tool">ashlr__issue_close</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__pr</span><span class="tool">ashlr__pr_comment</span><span class="tool">ashlr__pr_approve</span><span class="tool">ashlr__issue</span><span class="tool">ashlr__issue_create</span><span class="tool">ashlr__issue_close</span></div></td>
+      <td class="cell-unavail"><div class="tool-list"><span class="tool">ashlr__pr</span><span class="tool">ashlr__pr_comment</span><span class="tool">ashlr__pr_approve</span><span class="tool">ashlr__issue</span><span class="tool">ashlr__issue_create</span><span class="tool">ashlr__issue_close</span></div></td>
+    </tr>
+    </tbody>
+  </table>
+  <h2 class="section-hdr">MCP Server Details</h2>
+  <div style="margin-bottom:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:4px;">
+    <div class="srv-name"><code>ashlr-efficiency</code></div>
+    <div class="desc">Token-efficient Read/Grep/Edit and session savings reporter</div>
+    <div class="tool-list" style="margin-top:8px;"><span class="tool">ashlr__read</span><span class="tool">ashlr__grep</span><span class="tool">ashlr__glob</span><span class="tool">ashlr__savings</span><span class="tool">ashlr__flush</span></div>
+  </div>
+  <div style="margin-bottom:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:4px;">
+    <div class="srv-name"><code>ashlr-sql</code></div>
+    <div class="desc">Read-only SQL query tool for SQLite/Postgres/MySQL</div>
+    <div class="tool-list" style="margin-top:8px;"><span class="tool">ashlr__sql</span></div>
+  </div>
+  <div style="margin-bottom:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:4px;">
+    <div class="srv-name"><code>ashlr-bash</code></div>
+    <div class="desc">Sandboxed bash with background-process support</div>
+    <div class="tool-list" style="margin-top:8px;"><span class="tool">ashlr__bash</span><span class="tool">ashlr__bash_start</span><span class="tool">ashlr__bash_tail</span><span class="tool">ashlr__bash_stop</span><span class="tool">ashlr__bash_list</span></div>
+  </div>
+  <div style="margin-bottom:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:4px;">
+    <div class="srv-name"><code>ashlr-tree</code></div>
+    <div class="desc">Directory tree listing with smart depth limits</div>
+    <div class="tool-list" style="margin-top:8px;"><span class="tool">ashlr__tree</span><span class="tool">ashlr__ls</span></div>
+  </div>
+  <div style="margin-bottom:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:4px;">
+    <div class="srv-name"><code>ashlr-http</code></div>
+    <div class="desc">HTTP fetch with response summarization</div>
+    <div class="tool-list" style="margin-top:8px;"><span class="tool">ashlr__http</span><span class="tool">ashlr__webfetch</span><span class="tool">ashlr__websearch</span></div>
+  </div>
+  <div style="margin-bottom:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:4px;">
+    <div class="srv-name"><code>ashlr-diff</code></div>
+    <div class="desc">Compact unified diffs between files, commits, or strings</div>
+    <div class="tool-list" style="margin-top:8px;"><span class="tool">ashlr__diff</span><span class="tool">ashlr__diff_semantic</span></div>
+  </div>
+  <div style="margin-bottom:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:4px;">
+    <div class="srv-name"><code>ashlr-logs</code></div>
+    <div class="desc">Log tail/grep with intelligent truncation</div>
+    <div class="tool-list" style="margin-top:8px;"><span class="tool">ashlr__logs</span></div>
+  </div>
+  <div style="margin-bottom:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:4px;">
+    <div class="srv-name"><code>ashlr-genome</code></div>
+    <div class="desc">Genome-RAG codebase index (propose/consolidate/status)</div>
+    <div class="tool-list" style="margin-top:8px;"><span class="tool">ashlr__genome_propose</span><span class="tool">ashlr__genome_consolidate</span><span class="tool">ashlr__genome_status</span></div>
+  </div>
+  <div style="margin-bottom:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:4px;">
+    <div class="srv-name"><code>ashlr-orient</code></div>
+    <div class="desc">Fast 'what is this repo' orientation summary</div>
+    <div class="tool-list" style="margin-top:8px;"><span class="tool">ashlr__orient</span></div>
+  </div>
+  <div style="margin-bottom:16px;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:4px;">
+    <div class="srv-name"><code>ashlr-github</code></div>
+    <div class="desc">Compact GitHub PR + issue reader</div>
+    <div class="tool-list" style="margin-top:8px;"><span class="tool">ashlr__pr</span><span class="tool">ashlr__pr_comment</span><span class="tool">ashlr__pr_approve</span><span class="tool">ashlr__issue</span><span class="tool">ashlr__issue_create</span><span class="tool">ashlr__issue_close</span></div>
+  </div>
+</body>
+</html>
