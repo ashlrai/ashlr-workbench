@@ -1,0 +1,95 @@
+{
+  "_comment": "MCP server configuration schema for OpenHands (mcp.json stdio_servers array). OpenHands uses a different MCP config format than Claude Code — servers are declared as an array under stdio_servers rather than a dict under mcpServers. Each server runs inside the Linux container (arm64) with a Linux bun binary mounted at /host/bun. Validated by scripts/lib/config-schema-registry.sh mcp_validate_agent_config.",
+  "_version": "v1.0",
+  "_updated": "2026-06-29",
+  "agent": "openhands",
+  "config_file": "agents/openhands/mcp.json",
+  "config_format": "json",
+  "mcp_config_key": "stdio_servers",
+  "mcp_config_layout": "array",
+
+  "required_servers": [
+    "ashlr-efficiency",
+    "ashlr-sql",
+    "ashlr-bash",
+    "ashlr-tree",
+    "ashlr-http",
+    "ashlr-diff",
+    "ashlr-logs",
+    "ashlr-genome",
+    "ashlr-orient",
+    "ashlr-github"
+  ],
+
+  "optional_servers": [],
+
+  "server_schema": {
+    "required_fields": ["name", "command", "args"],
+    "optional_fields": ["env", "timeout", "disabled"],
+    "command_must_be_executable": true,
+    "args_must_be_array": true,
+    "name_must_be_unique": true
+  },
+
+  "container_paths": {
+    "plugin_root": "/host/ashlr-plugin",
+    "bun_binary": "/host/bun/bun",
+    "workspace": "/workspace"
+  },
+
+  "ashlr_plugin_servers": {
+    "entrypoint_command": "bash",
+    "entrypoint_args_pattern": ["-c", "cd /host/ashlr-plugin && exec /host/bun/bun run servers/{name}-server.ts"],
+    "server_file_pattern": "servers/{name}-server.ts",
+    "required_arg_contains": ["/host/ashlr-plugin"]
+  },
+
+  "third_party_servers": {
+    "supabase": {
+      "known_commands": ["/host/bun/bun", "npx"],
+      "required_env_vars": ["SUPABASE_ACCESS_TOKEN", "SUPABASE_PROJECT_REF"],
+      "breaking_changes": [
+        {
+          "old_arg": "--project-url",
+          "new_arg": "--project-ref",
+          "version": "supabase-mcp@0.3+",
+          "description": "Flag renamed from --project-url to --project-ref"
+        }
+      ]
+    }
+  },
+
+  "migrations": [
+    {
+      "old_config_key": "mcpServers",
+      "new_config_key": "stdio_servers",
+      "version": "openhands@0.9→v1.0",
+      "description": "OpenHands switched from mcpServers dict to stdio_servers array in MCPConfig pydantic model"
+    },
+    {
+      "old_server_path": "servers/plugin-server.ts",
+      "new_server_paths": [
+        "servers/efficiency-server.ts",
+        "servers/sql-server.ts",
+        "servers/bash-server.ts",
+        "servers/tree-server.ts",
+        "servers/http-server.ts",
+        "servers/diff-server.ts",
+        "servers/logs-server.ts",
+        "servers/genome-server.ts",
+        "servers/orient-server.ts",
+        "servers/github-server.ts"
+      ],
+      "version": "v0.8→v1.0",
+      "description": "Monolithic plugin-server.ts replaced by 10 focused server entry points"
+    },
+    {
+      "old_bun_path": "/usr/local/bin/bun",
+      "new_bun_path": "/host/bun/bun",
+      "version": "openhands@1.0→v1.0",
+      "description": "Bun binary moved from container PATH to mounted host-staged path"
+    }
+  ],
+
+  "required_top_level_keys": ["stdio_servers", "sse_servers", "shttp_servers"]
+}

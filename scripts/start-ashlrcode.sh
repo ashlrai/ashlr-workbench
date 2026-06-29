@@ -18,12 +18,32 @@ set -euo pipefail
 . "$(dirname "$0")/lib/config.sh"
 # shellcheck source=lib/llm-router.sh
 . "$(dirname "$0")/lib/llm-router.sh"
+# shellcheck source=lib/agent-lifecycle.sh
+. "$(dirname "$0")/lib/agent-lifecycle.sh"
 WB_CONFIG_DIR="$WORKBENCH/agents/ashlrcode"
 WB_SETTINGS="$WB_CONFIG_DIR/settings.json"
 
 if [ ! -f "$WB_SETTINGS" ]; then
   echo "start-ashlrcode: missing workbench settings at $WB_SETTINGS" >&2
   exit 1
+fi
+
+# ------------------------------------------------------------------
+# MCP config pre-launch validation gate
+# Validates MCP server configs before launching so misconfigurations
+# are surfaced early rather than causing silent MCP startup failures.
+# Set ASHLR_MCP_GATE_STRICT=1 to abort launch on validation errors.
+# ------------------------------------------------------------------
+# shellcheck source=lib/config-schema-registry.sh
+. "$(dirname "$0")/lib/config-schema-registry.sh"
+_MCP_GATE_STRICT="${ASHLR_MCP_GATE_STRICT:-0}"
+if [ "$_MCP_GATE_STRICT" = "1" ]; then
+  mcp_prelaunch_gate ashlrcode --abort-on-error || {
+    echo "start-ashlrcode: MCP config validation failed (ASHLR_MCP_GATE_STRICT=1)" >&2
+    exit 1
+  }
+else
+  mcp_prelaunch_gate ashlrcode
 fi
 
 # ------------------------------------------------------------------
@@ -90,6 +110,9 @@ fi
 _SE_AC_START="$(date +%s)"
 on_agent_start "ashlrcode" "$$" "${AC_MODEL:-${LLM_PRIMARY:-unknown}}" "$_SE_AC_MCP"
 replay_session_init "ashlrcode" "${AC_MODEL:-${LLM_PRIMARY:-unknown}}" "$_SE_AC_MCP" "$PWD"
+# Register with lifecycle manager and install shutdown traps.
+agent_lifecycle_register "ashlrcode" "$$"
+agent_lifecycle_install_traps
 trap '
   _SE_AC_RC=$?
   _SE_AC_DUR=$(( $(date +%s) - _SE_AC_START ))

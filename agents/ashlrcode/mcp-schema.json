@@ -1,0 +1,84 @@
+{
+  "_comment": "MCP server configuration schema for ashlrcode (settings.json mcpServers block). Validated by scripts/lib/config-schema-registry.sh mcp_validate_agent_config. The 10 ashlr-plugin servers are required; supabase and roblox-studio are optional 3rd-party servers.",
+  "_version": "v1.0",
+  "_updated": "2026-06-29",
+  "agent": "ashlrcode",
+  "config_file": "agents/ashlrcode/settings.json",
+  "config_format": "json",
+  "mcp_config_key": "mcpServers",
+
+  "required_servers": [
+    "ashlr-efficiency",
+    "ashlr-sql",
+    "ashlr-bash",
+    "ashlr-tree",
+    "ashlr-http",
+    "ashlr-diff",
+    "ashlr-logs",
+    "ashlr-genome",
+    "ashlr-orient",
+    "ashlr-github"
+  ],
+
+  "optional_servers": [
+    "supabase",
+    "roblox-studio"
+  ],
+
+  "server_schema": {
+    "required_fields": ["command", "args"],
+    "optional_fields": ["env", "timeout", "disabled"],
+    "command_must_be_executable": true,
+    "args_must_be_array": true
+  },
+
+  "ashlr_plugin_servers": {
+    "entrypoint_pattern": "mcp-entrypoint.sh",
+    "server_file_pattern": "servers/{name}-server.ts",
+    "known_commands": ["bash"],
+    "required_arg_contains": ["mcp-entrypoint.sh"]
+  },
+
+  "third_party_servers": {
+    "supabase": {
+      "known_commands": ["npx"],
+      "known_packages": ["@supabase/mcp-server-supabase"],
+      "required_env_vars": ["SUPABASE_ACCESS_TOKEN", "SUPABASE_PROJECT_REF"],
+      "breaking_changes": [
+        {
+          "old_arg": "--project-url",
+          "new_arg": "--project-ref",
+          "version": "supabase-mcp@0.3+",
+          "description": "Flag renamed from --project-url to --project-ref"
+        }
+      ]
+    },
+    "roblox-studio": {
+      "known_commands": ["/Applications/RobloxStudio.app/Contents/MacOS/StudioMCP"],
+      "required_args": ["--stdio"],
+      "breaking_changes": []
+    }
+  },
+
+  "migrations": [
+    {
+      "old_server_name": "ashlr-plugin",
+      "new_server_name": "ashlr-efficiency",
+      "version": "v0.8→v1.0",
+      "description": "Monolithic ashlr-plugin server split into 10 focused servers"
+    },
+    {
+      "old_entrypoint": "servers/plugin-server.ts",
+      "new_entrypoint": "servers/efficiency-server.ts",
+      "version": "v0.8→v1.0",
+      "description": "plugin-server.ts entry point replaced by per-server entry points"
+    },
+    {
+      "old_arg_pattern": "--access-token ${SUPABASE_SERVICE_KEY}",
+      "new_arg_pattern": "--access-token ${SUPABASE_ACCESS_TOKEN}",
+      "version": "supabase-mcp@0.2→v1.0",
+      "server": "supabase",
+      "description": "Env var renamed from SUPABASE_SERVICE_KEY to SUPABASE_ACCESS_TOKEN"
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "_comment": "MCP server configuration schema for Aider (aider.conf.yml mcp-servers block). Aider exposes MCP tools as /run commands via the aider-mcp-bridge.sh script rather than a native mcpServers dict. The 10 ashlr-plugin servers are available through the bridge; validated by scripts/lib/config-schema-registry.sh mcp_validate_agent_config.",
+  "_version": "v1.0",
+  "_updated": "2026-06-29",
+  "agent": "aider",
+  "config_file": "agents/aider/aider.conf.yml",
+  "config_format": "yaml",
+  "mcp_config_key": "mcp-servers",
+
+  "mcp_integration_mode": "bridge",
+  "bridge_script": "scripts/aider-mcp-bridge.sh",
+  "bridge_bin_dir_env": "AIDER_MCP_BIN_DIR",
+
+  "required_servers": [
+    "ashlr-efficiency",
+    "ashlr-sql",
+    "ashlr-bash",
+    "ashlr-tree",
+    "ashlr-http",
+    "ashlr-diff",
+    "ashlr-logs",
+    "ashlr-genome",
+    "ashlr-orient",
+    "ashlr-github"
+  ],
+
+  "optional_servers": [],
+
+  "server_schema": {
+    "required_fields": ["command", "args"],
+    "optional_fields": ["env", "timeout"],
+    "command_must_be_executable": true,
+    "args_must_be_array": true
+  },
+
+  "ashlr_plugin_servers": {
+    "entrypoint_pattern": "mcp-entrypoint.sh",
+    "server_file_pattern": "servers/{name}-server.ts",
+    "known_commands": ["bash"],
+    "required_arg_contains": ["mcp-entrypoint.sh"]
+  },
+
+  "third_party_servers": {},
+
+  "migrations": [
+    {
+      "old_config_key": "mcp_servers",
+      "new_config_key": "mcp-servers",
+      "version": "aider@0.29→v1.0",
+      "description": "YAML key renamed from mcp_servers (snake_case) to mcp-servers (kebab-case)"
+    },
+    {
+      "old_server_field": "entrypoint",
+      "new_server_field": "command",
+      "version": "aider@0.28→v1.0",
+      "description": "Server entrypoint field renamed from 'entrypoint' to 'command'"
+    }
+  ],
+
+  "bridge_env_vars": {
+    "required": ["ASHLR_PLUGIN_DIR"],
+    "optional": ["AIDER_MCP_TIMEOUT", "AIDER_MCP_BIN_DIR"]
+  }
+}

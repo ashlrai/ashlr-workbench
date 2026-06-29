@@ -1,0 +1,84 @@
+{
+  "_comment": "MCP server configuration schema for Goose (config.yaml extensions block). Goose calls MCP servers 'extensions' and uses a YAML dict keyed by server name. Each extension has enabled, type, name, cmd, args, timeout, and bundled fields. Validated by scripts/lib/config-schema-registry.sh mcp_validate_agent_config.",
+  "_version": "v1.0",
+  "_updated": "2026-06-29",
+  "agent": "goose",
+  "config_file": "agents/goose/config.yaml",
+  "config_format": "yaml",
+  "mcp_config_key": "extensions",
+  "mcp_config_layout": "dict",
+
+  "required_servers": [
+    "ashlr-efficiency",
+    "ashlr-sql",
+    "ashlr-bash",
+    "ashlr-tree",
+    "ashlr-http",
+    "ashlr-diff",
+    "ashlr-logs",
+    "ashlr-genome",
+    "ashlr-orient",
+    "ashlr-github"
+  ],
+
+  "optional_servers": [
+    "developer"
+  ],
+
+  "server_schema": {
+    "required_fields": ["enabled", "type", "name", "cmd", "args"],
+    "optional_fields": ["description", "timeout", "bundled", "env"],
+    "command_field_name": "cmd",
+    "args_must_be_array": true,
+    "type_allowed_values": ["stdio", "sse", "builtin"],
+    "enabled_must_be_boolean": true
+  },
+
+  "ashlr_plugin_servers": {
+    "entrypoint_pattern": "mcp-entrypoint.sh",
+    "server_file_pattern": "servers/{name}-server.ts",
+    "known_commands": ["bash"],
+    "required_arg_contains": ["mcp-entrypoint.sh"],
+    "plugin_root_env_var": "ASHLR_PLUGIN_ROOT"
+  },
+
+  "third_party_servers": {
+    "developer": {
+      "type": "builtin",
+      "bundled": true,
+      "description": "Goose native developer extension (file/shell/text tools)"
+    }
+  },
+
+  "migrations": [
+    {
+      "old_config_key": "mcpServers",
+      "new_config_key": "extensions",
+      "version": "goose@0.8→v1.0",
+      "description": "Goose renamed mcpServers block to extensions in 1.x config format"
+    },
+    {
+      "old_field": "command",
+      "new_field": "cmd",
+      "version": "goose@0.9→v1.0",
+      "description": "Extension command field renamed from 'command' to 'cmd'"
+    },
+    {
+      "old_field": "server",
+      "new_field": "args",
+      "version": "goose@0.8→v1.0",
+      "description": "Single 'server' string field replaced by 'args' array"
+    },
+    {
+      "old_env_var": "ASHLR_PLUGIN_DIR",
+      "new_env_var": "ASHLR_PLUGIN_ROOT",
+      "version": "v0.9→v1.0",
+      "description": "Plugin root env var renamed from ASHLR_PLUGIN_DIR to ASHLR_PLUGIN_ROOT"
+    }
+  ],
+
+  "env_var_expansion": {
+    "note": "Goose does NOT expand env vars in YAML values — start-goose.sh uses envsubst to expand ${ASHLR_PLUGIN_ROOT} before writing the runtime config copy",
+    "expanded_vars": ["ASHLR_PLUGIN_ROOT"]
+  }
+}

@@ -70,6 +70,23 @@ runtime_cfg="$runtime_cfg_dir/config.yaml"
 . "$script_dir/lib/config.sh"
 # shellcheck source=lib/llm-router.sh
 . "$script_dir/lib/llm-router.sh"
+# shellcheck source=lib/agent-lifecycle.sh
+. "$script_dir/lib/agent-lifecycle.sh"
+# shellcheck source=lib/config-schema-registry.sh
+. "$script_dir/lib/config-schema-registry.sh"
+
+# ── MCP config pre-launch validation gate ─────────────────────────────────────
+# Set ASHLR_MCP_GATE_STRICT=1 to abort launch on validation errors.
+_MCP_GATE_STRICT="${ASHLR_MCP_GATE_STRICT:-0}"
+if [ "$_MCP_GATE_STRICT" = "1" ]; then
+  mcp_prelaunch_gate goose --abort-on-error || {
+    echo "start-goose: MCP config validation failed (ASHLR_MCP_GATE_STRICT=1)" >&2
+    exit 1
+  }
+else
+  mcp_prelaunch_gate goose
+fi
+
 llm_router_init
 llm_router_select goose
 if [ "${LLM_PRIMARY_BACKEND:-none}" != "none" ]; then
@@ -135,6 +152,9 @@ fi
 _SE_GOOSE_START="$(date +%s)"
 on_agent_start "goose" "$$" "${LLM_PRIMARY_BACKEND:-lm-studio}/${LLM_PRIMARY_MODEL:-qwen3-coder-30b}" "$_SE_GOOSE_MCP"
 replay_session_init "goose" "${LLM_PRIMARY_BACKEND:-lm-studio}/${LLM_PRIMARY_MODEL:-qwen3-coder-30b}" "$_SE_GOOSE_MCP" "$GOOSE_WORKSPACE"
+# Register with lifecycle manager and install shutdown traps.
+agent_lifecycle_register "goose" "$$"
+agent_lifecycle_install_traps
 trap '
   _SE_GOOSE_RC=$?
   _SE_GOOSE_DUR=$(( $(date +%s) - _SE_GOOSE_START ))

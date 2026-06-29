@@ -32,6 +32,24 @@ AGENT_DIR="$REPO_ROOT/agents/openhands"
 . "$SCRIPT_DIR/lib/config.sh"
 # shellcheck source=lib/llm-router.sh
 . "$SCRIPT_DIR/lib/llm-router.sh"
+# shellcheck source=lib/agent-lifecycle.sh
+. "$SCRIPT_DIR/lib/agent-lifecycle.sh"
+# shellcheck source=lib/config-schema-registry.sh
+. "$SCRIPT_DIR/lib/config-schema-registry.sh"
+
+# ── MCP config pre-launch validation gate ─────────────────────────────────────
+# Validates agents/openhands/mcp.json before launching the container so
+# misconfigurations are surfaced early rather than causing silent MCP failures.
+# Set ASHLR_MCP_GATE_STRICT=1 to abort launch on validation errors.
+_MCP_GATE_STRICT="${ASHLR_MCP_GATE_STRICT:-0}"
+if [ "$_MCP_GATE_STRICT" = "1" ]; then
+  mcp_prelaunch_gate openhands --abort-on-error || {
+    echo "start-openhands: MCP config validation failed (ASHLR_MCP_GATE_STRICT=1)" >&2
+    exit 1
+  }
+else
+  mcp_prelaunch_gate openhands
+fi
 
 # ---- LLM router: probe all endpoints, select best for openhands ----
 llm_router_init
@@ -140,6 +158,10 @@ fi
 _SE_OH_START="$(date +%s)"
 on_agent_start "openhands" "$$" "$LLM_MODEL" "$_SE_OH_MCP"
 replay_session_init "openhands" "$LLM_MODEL" "$_SE_OH_MCP" "$WORKSPACE_HOST"
+# Register with lifecycle manager and install shutdown traps.
+# OpenHands is last in the teardown priority order (container teardown is slow).
+agent_lifecycle_register "openhands" "$$"
+agent_lifecycle_install_traps
 trap '
   _SE_OH_RC=$?
   _SE_OH_DUR=$(( $(date +%s) - _SE_OH_START ))

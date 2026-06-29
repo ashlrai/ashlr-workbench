@@ -16,8 +16,12 @@ set -euo pipefail
 . "$(dirname "$0")/lib/config.sh"
 # shellcheck source=lib/llm-router.sh
 . "$(dirname "$0")/lib/llm-router.sh"
+# shellcheck source=lib/agent-lifecycle.sh
+. "$(dirname "$0")/lib/agent-lifecycle.sh"
 # shellcheck source=aider-mcp-bridge.sh
 . "$(dirname "$0")/aider-mcp-bridge.sh"
+# shellcheck source=lib/config-schema-registry.sh
+. "$(dirname "$0")/lib/config-schema-registry.sh"
 CONFIG="$WORKBENCH/agents/aider/aider.conf.yml"
 
 # Resolve target project dir (first positional arg, default cwd)
@@ -27,6 +31,20 @@ if [ $# -ge 1 ]; then shift; fi
 if [ ! -d "$PROJECT_DIR" ]; then
   echo "start-aider: project dir not found: $PROJECT_DIR" >&2
   exit 1
+fi
+
+# ------------------------------------------------------------------
+# MCP config pre-launch validation gate
+# Set ASHLR_MCP_GATE_STRICT=1 to abort launch on validation errors.
+# ------------------------------------------------------------------
+_MCP_GATE_STRICT="${ASHLR_MCP_GATE_STRICT:-0}"
+if [ "$_MCP_GATE_STRICT" = "1" ]; then
+  mcp_prelaunch_gate aider --abort-on-error || {
+    echo "start-aider: MCP config validation failed (ASHLR_MCP_GATE_STRICT=1)" >&2
+    exit 1
+  }
+else
+  mcp_prelaunch_gate aider
 fi
 
 # LLM router: probe all endpoints, select best for aider, gracefully degrade.
@@ -115,6 +133,9 @@ except Exception:
 fi
 on_agent_start "aider" "$$" "${_AIDER_BACKEND}/${_AIDER_MODEL}" "$_SE_AIDER_MCP"
 replay_session_init "aider" "${_AIDER_BACKEND}/${_AIDER_MODEL}" "$_SE_AIDER_MCP" "$PROJECT_DIR"
+# Register with lifecycle manager and install shutdown traps.
+agent_lifecycle_register "aider" "$$"
+agent_lifecycle_install_traps
 trap '
   _SE_AIDER_RC=$?
   _SE_AIDER_DUR=$(( $(date +%s) - _SE_AIDER_START ))

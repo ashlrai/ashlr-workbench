@@ -704,6 +704,502 @@ LINEEOF
   return 0
 }
 
+# ─── MCP server config validation ────────────────────────────────────────────
+#
+# mcp_validate_agent_config <agent-name> [--diff-report-path <path>]
+#   Validates the MCP server config for the given agent against its
+#   agents/<name>/mcp-schema.json.  Checks:
+#     - All required servers are present
+#     - Each server has the required fields (command/cmd, args, name where needed)
+#     - Known breaking-change signatures are absent (e.g. old arg flags)
+#     - Known deprecated server names / entrypoints are absent
+#     - For ashlrcode/openhands: 3rd-party server env vars are referenced
+#
+#   Emits ok/warn/bad lines and returns 0 if clean, 1 if errors found.
+#
+#   With --diff-report-path <path>: also writes a human-readable diff report to
+#   the given path (JSON format) so callers can show what changed.
+#
+# mcp_validate_all_agents [--diff-report-path <path>]
+#   Runs mcp_validate_agent_config for all four agents.
+#
+# mcp_generate_diff_report <agent-name> <report-path>
+#   Standalone: writes the JSON diff report for an agent to a file.
+
+_sr_mcp_schema() {
+  printf '%s/agents/%s/mcp-schema.json' "$WORKBENCH" "$1"
+}
+
+# _sr_mcp_config_file <agent> — path to the agent's MCP config file
+# (may differ from the main config for openhands which has a separate mcp.json)
+_sr_mcp_config_file() {
+  case "$1" in
+    ashlrcode) printf '%s/agents/ashlrcode/settings.json' "$WORKBENCH" ;;
+    aider)     printf '%s/agents/aider/aider.conf.yml'    "$WORKBENCH" ;;
+    openhands) printf '%s/agents/openhands/mcp.json'      "$WORKBENCH" ;;
+    goose)     printf '%s/agents/goose/config.yaml'       "$WORKBENCH" ;;
+    *)         printf '' ;;
+  esac
+}
+
+mcp_validate_agent_config() {
+  local agent="$1"
+  local diff_report_path=""
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --diff-report-path) shift; diff_report_path="$1" ;;
+      *) warn "mcp_validate_agent_config: unknown option $1" ;;
+    esac
+    shift
+  done
+
+  local schema_file config_file label
+  schema_file="$(_sr_mcp_schema "$agent")"
+  config_file="$(_sr_mcp_config_file "$agent")"
+  label="agents/${agent}/mcp"
+
+  if [ ! -f "$schema_file" ]; then
+    warn "mcp-schema-registry: $agent — mcp-schema.json not found at ${schema_file#$WORKBENCH/}"
+    return 0
+  fi
+
+  if [ ! -f "$config_file" ]; then
+    bad "mcp-schema-registry: $agent — config file not found at ${config_file#$WORKBENCH/}"
+    return 1
+  fi
+
+  if ! _sr_python3_available; then
+    warn "mcp-schema-registry: python3 unavailable — MCP validation of $agent skipped"
+    return 0
+  fi
+
+  local tmpscript rc result
+  tmpscript="$(mktemp /tmp/sr-mcp-validate-XXXXXX.py)" || {
+    warn "mcp-schema-registry: cannot create temp file for MCP validation"
+    return 0
+  }
+
+  cat > "$tmpscript" << 'MCP_PYEOF'
+import sys, json, os, re
+try:
+    from datetime import datetime, timezone
+    _utcnow = lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+except Exception:
+    import datetime as _dt
+    _utcnow = lambda: _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+agent            = sys.argv[1]
+config_path      = sys.argv[2]
+schema_path      = sys.argv[3]
+diff_report_path = sys.argv[4]   # "/dev/null" = no report
+
+errors   = []
+warnings = []
+diff_items = []
+
+# ── Load schema ───────────────────────────────────────────────────────────────
+try:
+    schema = json.load(open(schema_path))
+except Exception as e:
+    print("ERROR: cannot parse mcp-schema.json: %s" % e)
+    sys.exit(1)
+
+# ── Load config ───────────────────────────────────────────────────────────────
+try:
+    raw = open(config_path).read()
+except Exception as e:
+    print("ERROR: cannot read config %s: %s" % (os.path.basename(config_path), e))
+    sys.exit(1)
+
+fmt        = schema.get("config_format", "json")
+config_key = schema.get("mcp_config_key", "mcpServers")
+# bridge_mode: agent wires MCP servers via an external bridge script (e.g. aider),
+# not via a native config block — skip native block checks for required_servers /
+# server fields, but still run migration/breaking-change checks on the raw file.
+bridge_mode = schema.get("mcp_integration_mode", "") == "bridge"
+
+# ── Parse config by format ────────────────────────────────────────────────────
+cfg_data  = {}
+mcp_block = None   # dict or list
+
+if fmt == "json":
+    try:
+        cfg_data = json.loads(raw)
+    except Exception as e:
+        print("ERROR: invalid JSON in %s: %s" % (os.path.basename(config_path), e))
+        sys.exit(1)
+    mcp_block = cfg_data.get(config_key)
+elif fmt in ("yaml", "toml"):
+    mcp_block = {}  # populated below via regex
+
+# ── Build present_servers set ─────────────────────────────────────────────────
+present_servers = set()
+
+if not bridge_mode:
+    if fmt == "json" and isinstance(mcp_block, dict):
+        present_servers = set(mcp_block.keys())
+    elif fmt == "json" and isinstance(mcp_block, list):
+        for entry in mcp_block:
+            if isinstance(entry, dict) and "name" in entry:
+                present_servers.add(entry["name"])
+    elif fmt == "yaml":
+        in_block = False
+        for line in raw.splitlines():
+            if re.match(r'^' + re.escape(config_key) + r'\s*:', line):
+                in_block = True
+                continue
+            if in_block:
+                if re.match(r'^\S', line) and not re.match(r'^-', line):
+                    in_block = False
+                    continue
+                m = re.match(r'^  ([a-zA-Z0-9_-]+)\s*:', line)
+                if m:
+                    present_servers.add(m.group(1))
+
+# ── Check required servers (skip for bridge-mode agents) ──────────────────────
+required_servers = schema.get("required_servers", [])
+if not bridge_mode:
+    for srv in required_servers:
+        if srv not in present_servers:
+            errors.append("required MCP server '%s' is missing from %s" % (
+                srv, config_key))
+            diff_items.append({"type": "missing_required_server", "server": srv})
+
+# ── Check server fields (JSON only; skip for bridge-mode) ────────────────────
+server_schema    = schema.get("server_schema", {})
+required_fields  = server_schema.get("required_fields", [])
+args_must_be_arr = server_schema.get("args_must_be_array", True)
+
+if not bridge_mode:
+    if fmt == "json" and isinstance(mcp_block, dict):
+        for srv_name, srv_cfg in mcp_block.items():
+            if not isinstance(srv_cfg, dict):
+                errors.append("MCP server '%s': config must be an object, got %s" % (
+                    srv_name, type(srv_cfg).__name__))
+                continue
+            for field in required_fields:
+                if field not in srv_cfg:
+                    errors.append("MCP server '%s': missing required field '%s'" % (srv_name, field))
+                    diff_items.append({"type": "missing_field", "server": srv_name, "field": field})
+            if args_must_be_arr and "args" in srv_cfg and not isinstance(srv_cfg["args"], list):
+                errors.append("MCP server '%s': 'args' must be an array" % srv_name)
+
+    elif fmt == "json" and isinstance(mcp_block, list):
+        for entry in mcp_block:
+            if not isinstance(entry, dict):
+                continue
+            srv_name = entry.get("name", "<unnamed>")
+            for field in required_fields:
+                if field not in entry:
+                    errors.append("MCP server '%s': missing required field '%s'" % (srv_name, field))
+                    diff_items.append({"type": "missing_field", "server": srv_name, "field": field})
+            if args_must_be_arr and "args" in entry and not isinstance(entry["args"], list):
+                errors.append("MCP server '%s': 'args' must be an array" % srv_name)
+
+# ── Check ashlr-plugin entrypoint pattern (skip for bridge-mode) ──────────────
+plugin_schema           = schema.get("ashlr_plugin_servers", {})
+entrypoint_must_contain = plugin_schema.get("required_arg_contains", [])
+
+if not bridge_mode:
+    if fmt == "json" and isinstance(mcp_block, dict):
+        for srv_name, srv_cfg in mcp_block.items():
+            if not srv_name.startswith("ashlr-") or not isinstance(srv_cfg, dict):
+                continue
+            args_str = " ".join(str(a) for a in srv_cfg.get("args", []))
+            for must_contain in entrypoint_must_contain:
+                if must_contain not in args_str:
+                    errors.append(
+                        "ashlr MCP server '%s': args should contain '%s' "
+                        "(entrypoint path may be stale)" % (srv_name, must_contain))
+                    diff_items.append({
+                        "type": "stale_entrypoint", "server": srv_name, "expected": must_contain
+                    })
+    elif fmt == "json" and isinstance(mcp_block, list):
+        for entry in mcp_block:
+            if not isinstance(entry, dict):
+                continue
+            srv_name = entry.get("name", "")
+            if not srv_name.startswith("ashlr-"):
+                continue
+            args_str = " ".join(str(a) for a in entry.get("args", []))
+            for must_contain in entrypoint_must_contain:
+                if must_contain not in args_str:
+                    errors.append(
+                        "ashlr MCP server '%s': args should contain '%s' "
+                        "(entrypoint path may be stale)" % (srv_name, must_contain))
+
+# ── Check breaking changes in 3rd-party servers ───────────────────────────────
+third_party = schema.get("third_party_servers", {})
+
+for tp_name, tp_schema_entry in third_party.items():
+    if tp_name not in present_servers:
+        continue
+    breaking = tp_schema_entry.get("breaking_changes", [])
+    for bc in breaking:
+        old_arg = bc.get("old_arg", "")
+        new_arg = bc.get("new_arg", "")
+        version = bc.get("version", "")
+        description = bc.get("description", "")
+        if not old_arg:
+            continue
+        if old_arg in raw:
+            msg = "3rd-party server '%s': deprecated arg '%s'" % (tp_name, old_arg)
+            if new_arg:
+                msg += " — migrate to '%s'" % new_arg
+            if version:
+                msg += " (since %s)" % version
+            if description:
+                msg += " — %s" % description
+            errors.append(msg)
+            diff_items.append({
+                "type": "breaking_change", "server": tp_name,
+                "old_arg": old_arg, "new_arg": new_arg
+            })
+
+# ── Check schema-level migrations (deprecated server names / entrypoints) ─────
+# For JSON format, we check actual parsed keys to avoid matching comment strings.
+schema_migrations = schema.get("migrations", [])
+for mig in schema_migrations:
+    old_srv = mig.get("old_server_name", "")
+    old_ep  = mig.get("old_entrypoint", "") or mig.get("old_server_path", "")
+    old_key = mig.get("old_config_key", "")
+
+    if old_srv and old_srv in present_servers:
+        errors.append(
+            "deprecated MCP server name '%s' found — "
+            "rename to '%s' (%s)" % (
+                old_srv,
+                mig.get("new_server_name", "?"),
+                mig.get("description", "")))
+        diff_items.append({
+            "type": "deprecated_server_name",
+            "old": old_srv, "new": mig.get("new_server_name", "")
+        })
+
+    if old_ep and old_ep in raw:
+        errors.append(
+            "deprecated entrypoint '%s' still referenced — "
+            "update to current path (%s)" % (old_ep, mig.get("description", "")))
+        diff_items.append({
+            "type": "stale_entrypoint_path", "old": old_ep,
+            "description": mig.get("description", "")
+        })
+
+    if old_key:
+        # For JSON: check actual top-level keys in the parsed object (not raw string)
+        # to avoid false positives from comment fields.
+        old_key_found = False
+        if fmt == "json" and isinstance(cfg_data, dict):
+            old_key_found = old_key in cfg_data
+        elif fmt in ("yaml", "toml"):
+            # YAML/TOML: regex match at start of line (not inside comment values)
+            old_key_found = bool(re.search(
+                r'^' + re.escape(old_key) + r'\s*[=:]', raw, re.MULTILINE))
+        if old_key_found:
+            errors.append(
+                "deprecated MCP config key '%s' — "
+                "migrate to '%s' (%s)" % (
+                    old_key,
+                    mig.get("new_config_key", "?"),
+                    mig.get("description", "")))
+            diff_items.append({
+                "type": "deprecated_config_key",
+                "old": old_key, "new": mig.get("new_config_key", "")
+            })
+
+# ── Check 3rd-party server env var references ─────────────────────────────────
+if fmt == "json" and isinstance(mcp_block, dict):
+    for tp_name, tp_schema_entry in third_party.items():
+        if tp_name not in mcp_block:
+            continue
+        srv_cfg = mcp_block[tp_name]
+        if not isinstance(srv_cfg, dict):
+            continue
+        required_env = tp_schema_entry.get("required_env_vars", [])
+        combined = json.dumps(srv_cfg.get("args", [])) + " " + json.dumps(srv_cfg.get("env", {}))
+        for ev in required_env:
+            if ev not in combined:
+                warnings.append(
+                    "3rd-party server '%s': env var '%s' not referenced in args or env block "
+                    "(agent startup may fail if not set)" % (tp_name, ev))
+
+# ── Write diff report ─────────────────────────────────────────────────────────
+if diff_report_path and diff_report_path != "/dev/null":
+    try:
+        report = {
+            "timestamp":      _utcnow(),
+            "agent":          agent,
+            "config_file":    os.path.basename(config_path),
+            "schema_version": schema.get("_version", "v1.0"),
+            "errors":         errors,
+            "warnings":       warnings,
+            "diff_items":     diff_items,
+            "status":         "clean" if not errors else "errors",
+        }
+        open(diff_report_path, "w").write(json.dumps(report, indent=2) + "\n")
+        print("REPORT: diff report written to %s" % os.path.basename(diff_report_path))
+    except Exception as e:
+        print("WARN: could not write diff report: %s" % e)
+
+# ── Output ────────────────────────────────────────────────────────────────────
+for w in warnings:
+    print("WARN: %s" % w)
+
+if errors:
+    for e in errors:
+        print("ERROR: %s" % e)
+    sys.exit(1)
+
+bridge_note = " (bridge-mode: servers provided via aider-mcp-bridge)" if bridge_mode else ""
+print("OK: %s MCP config passes schema validation (%d servers, %d required present)%s" % (
+    agent,
+    len(present_servers),
+    len([s for s in required_servers if s in present_servers]),
+    bridge_note
+))
+sys.exit(0)
+MCP_PYEOF
+
+  local diff_path_arg="${diff_report_path:-}"
+  [ -z "$diff_path_arg" ] && diff_path_arg="/dev/null"
+
+  result="$(python3 "$tmpscript" \
+    "$agent" "$config_file" "$schema_file" "$diff_path_arg" 2>&1)"
+  rc=$?
+  rm -f "$tmpscript"
+
+  local any_error=0
+  while IFS= read -r line; do
+    case "$line" in
+      "OK:"*)      ok   "$label: ${line#OK: }" ;;
+      "REPORT:"*)  ok   "$label: ${line#REPORT: }" ;;
+      "WARN:"*)    warn "$label: ${line#WARN: }" ;;
+      "ERROR:"*)   bad  "$label: ${line#ERROR: }"; any_error=1 ;;
+      "")          ;;
+      *)           [ -n "$line" ] && warn "$label: $line" ;;
+    esac
+  done << MCPLINEEOF
+$result
+MCPLINEEOF
+
+  if [ "$any_error" -gt 0 ] || [ "$rc" -ne 0 ]; then
+    return 1
+  fi
+  return 0
+}
+
+# mcp_validate_all_agents [--diff-report-path <path>] [--diff-report-dir <dir>]
+# Validate MCP config for all four agents.
+# --diff-report-dir <dir>: write per-agent reports as <dir>/<agent>-mcp-diff.json
+mcp_validate_all_agents() {
+  local diff_report_dir=""
+  local diff_report_path_flag=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --diff-report-dir)  shift; diff_report_dir="$1" ;;
+      --diff-report-path) shift; diff_report_path_flag="$1" ;;
+      *) warn "mcp_validate_all_agents: unknown option $1" ;;
+    esac
+    shift
+  done
+
+  local agents="ashlrcode aider openhands goose"
+  local any_issues=0
+
+  for agent in $agents; do
+    local report_path=""
+    if [ -n "$diff_report_dir" ]; then
+      mkdir -p "$diff_report_dir"
+      report_path="${diff_report_dir}/${agent}-mcp-diff.json"
+    elif [ -n "$diff_report_path_flag" ]; then
+      report_path="$diff_report_path_flag"
+    fi
+
+    if [ -n "$report_path" ]; then
+      mcp_validate_agent_config "$agent" --diff-report-path "$report_path" || any_issues=1
+    else
+      mcp_validate_agent_config "$agent" || any_issues=1
+    fi
+  done
+
+  return "$any_issues"
+}
+
+# mcp_generate_diff_report <agent-name> <report-path>
+# Write a JSON diff report for a single agent's MCP config without printing
+# ok/warn/bad output to stdout.  Returns 0 on success.
+mcp_generate_diff_report() {
+  local agent="$1"
+  local report_path="$2"
+
+  if [ -z "$agent" ] || [ -z "$report_path" ]; then
+    bad "mcp_generate_diff_report: usage: mcp_generate_diff_report <agent> <report-path>"
+    return 1
+  fi
+
+  # Redirect output to /dev/null for the display; the report is written as a side effect.
+  local _dummy
+  _dummy="$(mcp_validate_agent_config "$agent" --diff-report-path "$report_path" 2>&1)" || true
+  [ -f "$report_path" ]
+}
+
+# mcp_prelaunch_gate <agent-name> [--abort-on-error] [--diff-report-path <path>]
+# Pre-launch validation gate called by start-{agent}.sh scripts before launching
+# the agent.  Validates the agent's MCP config and prints a summary.
+#
+# By default (no --abort-on-error) it warns but does NOT abort, so a misconfigured
+# MCP server doesn't block the agent from starting.
+# With --abort-on-error it exits 1 if validation fails (used in strict CI mode).
+#
+# Emits a compact one-line summary: "[mcp-gate] agentname: N servers OK / M errors"
+mcp_prelaunch_gate() {
+  local agent="$1"
+  local abort_on_error=0
+  local diff_report_path=""
+  shift
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --abort-on-error)   abort_on_error=1 ;;
+      --diff-report-path) shift; diff_report_path="$1" ;;
+      *) ;;
+    esac
+    shift
+  done
+
+  local schema_file config_file
+  schema_file="$(_sr_mcp_schema "$agent")"
+  config_file="$(_sr_mcp_config_file "$agent")"
+
+  # Silently skip if schema not present (feature not yet set up for this agent)
+  if [ ! -f "$schema_file" ]; then
+    return 0
+  fi
+
+  if [ ! -f "$config_file" ]; then
+    warn "[mcp-gate] $agent: config file not found — ${config_file#$WORKBENCH/}"
+    [ "$abort_on_error" -eq 1 ] && return 1
+    return 0
+  fi
+
+  # Run validation; capture pass/fail
+  local gate_rc=0
+  if [ -n "$diff_report_path" ]; then
+    mcp_validate_agent_config "$agent" --diff-report-path "$diff_report_path" || gate_rc=$?
+  else
+    mcp_validate_agent_config "$agent" || gate_rc=$?
+  fi
+
+  if [ "$gate_rc" -ne 0 ]; then
+    warn "[mcp-gate] $agent: MCP config validation found errors — agent will start but some MCP servers may fail"
+    [ "$abort_on_error" -eq 1 ] && return 1
+  fi
+
+  return 0
+}
+
 # ─── config_registry_check_all ────────────────────────────────────────────────
 # Run strict schema registry validation for all four known agents.
 # Called by healthcheck.sh to warn when any agent config is out of date.
@@ -730,6 +1226,9 @@ config_registry_check_all() {
     fi
 
     config_validate_strict "$config_file" "$agent" || any_issues=1
+
+    # Also validate MCP config for this agent
+    mcp_validate_agent_config "$agent" || any_issues=1
   done
 
   return "$any_issues"
@@ -754,17 +1253,43 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   printf "%sConfig Schema Registry%s (version %s)\n" \
     "$C_BOLD" "$C_RESET" "$SCHEMA_REGISTRY_VERSION"
 
-  # Handle --migrate-all flag
-  if [ "${1:-}" = "--migrate-all" ]; then
-    target_ver="${2:-$SCHEMA_REGISTRY_VERSION}"
-    printf "\n%sMigrating all agent configs → %s%s\n" "$C_BOLD" "$target_ver" "$C_RESET"
-    for _agent in openhands goose aider ashlrcode; do
-      _cfg="$(_sr_agent_config "$_agent")"
-      config_migrate_auto "$_cfg" --target-version "$target_ver"
-    done
-  else
-    config_registry_check_all
-  fi
+  # Handle flags
+  case "${1:-}" in
+    --migrate-all)
+      target_ver="${2:-$SCHEMA_REGISTRY_VERSION}"
+      printf "\n%sMigrating all agent configs → %s%s\n" "$C_BOLD" "$target_ver" "$C_RESET"
+      for _agent in openhands goose aider ashlrcode; do
+        _cfg="$(_sr_agent_config "$_agent")"
+        config_migrate_auto "$_cfg" --target-version "$target_ver"
+      done
+      ;;
+    --mcp-validate-all)
+      printf "\n%sMCP Config Validation (all agents)%s\n" "$C_BOLD" "$C_RESET"
+      _diff_dir="${2:-}"
+      if [ -n "$_diff_dir" ]; then
+        mcp_validate_all_agents --diff-report-dir "$_diff_dir"
+      else
+        mcp_validate_all_agents
+      fi
+      ;;
+    --mcp-validate)
+      _mcp_agent="${2:-}"
+      _mcp_report="${3:-}"
+      if [ -z "$_mcp_agent" ]; then
+        bad "usage: config-schema-registry.sh --mcp-validate <agent> [diff-report-path]"
+        exit 1
+      fi
+      printf "\n%sMCP Config Validation: %s%s\n" "$C_BOLD" "$_mcp_agent" "$C_RESET"
+      if [ -n "$_mcp_report" ]; then
+        mcp_validate_agent_config "$_mcp_agent" --diff-report-path "$_mcp_report"
+      else
+        mcp_validate_agent_config "$_mcp_agent"
+      fi
+      ;;
+    *)
+      config_registry_check_all
+      ;;
+  esac
 
   printf "\n%sResult:%s %s%d passed%s, %s%d warnings%s, %s%d failed%s\n" \
     "$C_BOLD" "$C_RESET" \
