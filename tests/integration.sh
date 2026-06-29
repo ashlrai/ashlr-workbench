@@ -976,6 +976,300 @@ else
   _fail "aw-log help missing session-analytics (got: $AW_LOG_HELP)"
 fi
 
+# ─── Test 11: llm-router.sh library ─────────────────────────────────────────
+printf "\n\033[1mTest 11: llm-router.sh library\033[0m\n"
+
+LLM_ROUTER_SH="$REPO_ROOT/scripts/lib/llm-router.sh"
+
+# 11a — file exists and is executable
+assert_file_executable "llm-router.sh is executable" "$LLM_ROUTER_SH"
+
+# 11b — bash syntax check
+if bash -n "$LLM_ROUTER_SH" 2>/dev/null; then
+  _ok "llm-router.sh passes bash syntax check"
+else
+  _fail "llm-router.sh has bash syntax errors"
+fi
+
+# 11c — double-source guard
+DOUBLE_LR="$(
+  env -i HOME="$HOME" bash -c "
+    . '$CONFIG_SH'
+    . '$LLM_ROUTER_SH'
+    . '$LLM_ROUTER_SH'
+    echo sourced_twice_ok
+  " 2>&1
+)"
+if printf '%s' "$DOUBLE_LR" | grep -q 'sourced_twice_ok'; then
+  _ok "llm-router.sh double-source guard works"
+else
+  _fail "llm-router.sh double-source produced errors: $DOUBLE_LR"
+fi
+
+# 11d — all public functions are defined after sourcing
+for fn in llm_router_init llm_router_select llm_router_status on_routing_decision llm_router_aider_args; do
+  LR_FUNC="$(
+    env -i HOME="$HOME" bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      if declare -f $fn >/dev/null 2>&1; then echo defined; else echo missing; fi
+    " 2>&1
+  )"
+  assert_eq "$fn function is defined" "defined" "$LR_FUNC"
+done
+
+# 11e — llm_router_init runs without error even when all endpoints are down.
+#        We simulate this by pointing URLs at an unreachable port.
+LR_INIT_DOWN="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_ROUTER_EVENTS="0" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      llm_router_init
+      echo \"READY=\${LLM_ROUTER_READY:-0}\"
+      echo \"PRIMARY=\${LLM_PRIMARY:-none:}\"
+      echo \"FALLBACK=\${LLM_FALLBACK:-none:}\"
+    " 2>&1
+)"
+if printf '%s' "$LR_INIT_DOWN" | grep -q 'READY=1'; then
+  _ok "llm_router_init completes (sets READY=1) even when all endpoints are down"
+else
+  _fail "llm_router_init did not set READY=1 (output: $LR_INIT_DOWN)"
+fi
+LR_PRIMARY_DOWN="$(printf '%s' "$LR_INIT_DOWN" | grep '^PRIMARY=' | cut -d= -f2-)"
+if [ "$LR_PRIMARY_DOWN" = "none:" ]; then
+  _ok "llm_router_init sets PRIMARY=none: when all endpoints are down"
+else
+  _fail "llm_router_init PRIMARY unexpected when all down: '$LR_PRIMARY_DOWN'"
+fi
+
+# 11f — llm_router_init exports LLM_PRIMARY_MS and FALLBACK_THRESHOLD
+LR_VARS="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_FALLBACK_MS="2500" \
+    ASHLR_LLM_ROUTER_EVENTS="0" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      llm_router_init
+      echo \"THRESHOLD=\${FALLBACK_THRESHOLD:-unset}\"
+    " 2>&1
+)"
+assert_eq "FALLBACK_THRESHOLD exported from ASHLR_LLM_FALLBACK_MS" \
+  "THRESHOLD=2500" "$(printf '%s' "$LR_VARS" | grep '^THRESHOLD=')"
+
+# 11g — llm_router_select gracefully degrades when primary is unavailable
+LR_SELECT="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_ROUTER_EVENTS="0" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      llm_router_init
+      llm_router_select aider
+      echo \"PRIMARY=\${LLM_PRIMARY:-none:}\"
+      echo \"FALLBACK=\${LLM_FALLBACK:-none:}\"
+    " 2>&1
+)"
+if printf '%s' "$LR_SELECT" | grep -q 'PRIMARY='; then
+  _ok "llm_router_select completes without error when all endpoints down"
+else
+  _fail "llm_router_select failed (output: $LR_SELECT)"
+fi
+
+# 11h — on_routing_decision emits a well-formed JSON event
+LR_TMP="$(mktemp /tmp/lr-test-XXXXXX.jsonl)"
+LR_EVENT="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_ROUTER_LOG="$LR_TMP" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      LLM_PRIMARY_MS=450
+      LLM_FALLBACK_MS=99999
+      FALLBACK_THRESHOLD=2000
+      on_routing_decision 'aider' 'lmstudio:qwen3-coder-30b' 'none:'
+      cat '$LR_TMP'
+    " 2>&1
+)"
+rm -f "$LR_TMP"
+LR_EVENT_OK="$(printf '%s' "$LR_EVENT" | python3 -c "
+import sys, json
+line = sys.stdin.read().strip()
+try:
+    o = json.loads(line)
+    assert o.get('event') == 'routing_decision', f'bad event: {o}'
+    assert o.get('agent') == 'aider', f'bad agent: {o}'
+    assert o.get('primary') == 'lmstudio:qwen3-coder-30b', f'bad primary: {o}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "on_routing_decision emits valid JSON with correct fields" "ok" "$LR_EVENT_OK"
+
+# 11i — ASHLR_LLM_ROUTER_EVENTS=0 suppresses routing event writes
+LR_TMP="$(mktemp /tmp/lr-test-XXXXXX.jsonl)"
+LR_SUPPRESS="$(
+  env -i HOME="$HOME" \
+    ASHLR_LLM_ROUTER_EVENTS="0" \
+    ASHLR_LLM_ROUTER_LOG="$LR_TMP" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      LLM_PRIMARY_MS=100
+      LLM_FALLBACK_MS=99999
+      FALLBACK_THRESHOLD=2000
+      on_routing_decision 'goose' 'lmstudio:qwen3' 'none:'
+      wc -l < '$LR_TMP' | tr -d ' '
+    " 2>&1
+)"
+rm -f "$LR_TMP"
+assert_eq "ASHLR_LLM_ROUTER_EVENTS=0 suppresses routing event writes" "0" "$LR_SUPPRESS"
+
+# 11j — llm_router_status runs without error and outputs expected sections
+LR_STATUS="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_ROUTER_EVENTS="0" \
+    NO_COLOR="1" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      llm_router_init
+      llm_router_status
+    " 2>&1
+)"
+if printf '%s' "$LR_STATUS" | grep -qi 'Latency Matrix'; then
+  _ok "llm_router_status output contains 'Latency Matrix'"
+else
+  _fail "llm_router_status missing 'Latency Matrix' (got: $LR_STATUS)"
+fi
+for backend in lmstudio ollama xai anthropic; do
+  if printf '%s' "$LR_STATUS" | grep -q "$backend"; then
+    _ok "llm_router_status mentions backend: $backend"
+  else
+    _fail "llm_router_status missing backend: $backend"
+  fi
+done
+if printf '%s' "$LR_STATUS" | grep -qi 'Primary\|Fallback\|Threshold'; then
+  _ok "llm_router_status output contains routing summary"
+else
+  _fail "llm_router_status missing routing summary"
+fi
+
+# 11k — llm_router_aider_args returns non-empty flags
+LR_AIDER_ARGS="$(
+  env -i HOME="$HOME" \
+    LM_STUDIO_URL="http://localhost:19999/v1" \
+    OLLAMA_URL="http://localhost:19998" \
+    ASHLR_LLM_PROBE_TIMEOUT="1" \
+    ASHLR_LLM_ROUTER_EVENTS="0" \
+    bash -c "
+      . '$CONFIG_SH'
+      . '$LLM_ROUTER_SH'
+      llm_router_init
+      llm_router_aider_args
+    " 2>&1
+)"
+if [ -n "$LR_AIDER_ARGS" ]; then
+  _ok "llm_router_aider_args returns non-empty flags even when all endpoints down"
+else
+  _fail "llm_router_aider_args returned empty string"
+fi
+
+# 11l — start-aider.sh sources llm-router.sh
+if grep -q 'llm-router.sh' "$REPO_ROOT/scripts/start-aider.sh"; then
+  _ok "start-aider.sh sources llm-router.sh"
+else
+  _fail "start-aider.sh does not source llm-router.sh"
+fi
+if grep -q 'llm_router_init' "$REPO_ROOT/scripts/start-aider.sh"; then
+  _ok "start-aider.sh calls llm_router_init"
+else
+  _fail "start-aider.sh does not call llm_router_init"
+fi
+
+# 11m — start-goose.sh sources llm-router.sh
+if grep -q 'llm-router.sh' "$REPO_ROOT/scripts/start-goose.sh"; then
+  _ok "start-goose.sh sources llm-router.sh"
+else
+  _fail "start-goose.sh does not source llm-router.sh"
+fi
+
+# 11n — start-ashlrcode.sh sources llm-router.sh
+if grep -q 'llm-router.sh' "$REPO_ROOT/scripts/start-ashlrcode.sh"; then
+  _ok "start-ashlrcode.sh sources llm-router.sh"
+else
+  _fail "start-ashlrcode.sh does not source llm-router.sh"
+fi
+
+# 11o — start-openhands.sh sources llm-router.sh
+if grep -q 'llm-router.sh' "$REPO_ROOT/scripts/start-openhands.sh"; then
+  _ok "start-openhands.sh sources llm-router.sh"
+else
+  _fail "start-openhands.sh does not source llm-router.sh"
+fi
+
+# 11p — aw binary recognises 'llm-status' as a known subcommand
+if grep -q 'llm-status' "$REPO_ROOT/bin/aw"; then
+  _ok "bin/aw recognises llm-status subcommand"
+else
+  _fail "bin/aw does not recognise llm-status"
+fi
+
+# 11q — aw help text mentions llm-status
+AW_HELP="$(
+  env -i HOME="$HOME" NO_COLOR=1 bash -c "'$REPO_ROOT/bin/aw' help" 2>&1
+)"
+if printf '%s' "$AW_HELP" | grep -q 'llm-status'; then
+  _ok "aw help mentions llm-status"
+else
+  _fail "aw help missing llm-status (got: $AW_HELP)"
+fi
+
+# 11r — start-aider.sh bash syntax OK after router integration
+if bash -n "$REPO_ROOT/scripts/start-aider.sh" 2>/dev/null; then
+  _ok "start-aider.sh bash syntax OK after router integration"
+else
+  _fail "start-aider.sh has bash syntax errors after router integration"
+fi
+
+# 11s — start-goose.sh bash syntax OK after router integration
+if bash -n "$REPO_ROOT/scripts/start-goose.sh" 2>/dev/null; then
+  _ok "start-goose.sh bash syntax OK after router integration"
+else
+  _fail "start-goose.sh has bash syntax errors after router integration"
+fi
+
+# 11t — start-ashlrcode.sh bash syntax OK after router integration
+if bash -n "$REPO_ROOT/scripts/start-ashlrcode.sh" 2>/dev/null; then
+  _ok "start-ashlrcode.sh bash syntax OK after router integration"
+else
+  _fail "start-ashlrcode.sh has bash syntax errors after router integration"
+fi
+
+# 11u — start-openhands.sh bash syntax OK after router integration
+if bash -n "$REPO_ROOT/scripts/start-openhands.sh" 2>/dev/null; then
+  _ok "start-openhands.sh bash syntax OK after router integration"
+else
+  _fail "start-openhands.sh has bash syntax errors after router integration"
+fi
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n"
 if [ "$FAIL" -eq 0 ]; then

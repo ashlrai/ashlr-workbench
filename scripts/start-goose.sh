@@ -65,6 +65,22 @@ runtime_cfg="$runtime_cfg_dir/config.yaml"
 : "${ASHLR_PLUGIN_ROOT:=$HOME/Desktop/ashlr-plugin}"
 : "${GOOSE_WORKSPACE:=$HOME/Desktop}"
 
+# ─── LLM router ───────────────────────────────────────────────────────────────
+# shellcheck source=lib/config.sh
+. "$script_dir/lib/config.sh"
+# shellcheck source=lib/llm-router.sh
+. "$script_dir/lib/llm-router.sh"
+llm_router_init
+llm_router_select goose
+if [ "${LLM_PRIMARY_BACKEND:-none}" != "none" ]; then
+  echo "start-goose: routing → primary=${LLM_PRIMARY} (${LLM_PRIMARY_MS}ms)" >&2
+  if [ "${LLM_FALLBACK_BACKEND:-none}" != "none" ]; then
+    echo "start-goose: fallback → ${LLM_FALLBACK} (${LLM_FALLBACK_MS}ms, threshold=${FALLBACK_THRESHOLD}ms)" >&2
+  fi
+fi
+# Export OPENAI_HOST for the goose curl sanity check below.
+export OPENAI_HOST="${LLM_PRIMARY_URL:-http://localhost:1234}"
+
 # ─── Session log (cross-agent trace) ──────────────────────────────────────────
 # shellcheck source=lib/session-log.sh
 . "$script_dir/lib/session-log.sh"
@@ -115,7 +131,7 @@ _GOOSE_SERVERS
 fi
 
 _SE_GOOSE_START="$(date +%s)"
-on_agent_start "goose" "$$" "lm-studio/qwen3-coder-30b" "$_SE_GOOSE_MCP"
+on_agent_start "goose" "$$" "${LLM_PRIMARY_BACKEND:-lm-studio}/${LLM_PRIMARY_MODEL:-qwen3-coder-30b}" "$_SE_GOOSE_MCP"
 trap '
   _SE_GOOSE_RC=$?
   _SE_GOOSE_DUR=$(( $(date +%s) - _SE_GOOSE_START ))

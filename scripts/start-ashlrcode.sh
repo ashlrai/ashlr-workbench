@@ -16,6 +16,8 @@ set -euo pipefail
 
 # shellcheck source=lib/config.sh
 . "$(dirname "$0")/lib/config.sh"
+# shellcheck source=lib/llm-router.sh
+. "$(dirname "$0")/lib/llm-router.sh"
 WB_CONFIG_DIR="$WORKBENCH/agents/ashlrcode"
 WB_SETTINGS="$WB_CONFIG_DIR/settings.json"
 
@@ -50,6 +52,10 @@ if [ -z "${XAI_API_KEY:-}" ] && [ -f "$HOME/.ashlrcode/settings.json" ]; then
   export XAI_API_KEY="$(awk -F'"' '/"apiKey"[[:space:]]*:[[:space:]]*"xai-/ {print $4; exit}' "$HOME/.ashlrcode/settings.json" 2>/dev/null || true)"
 fi
 
+# LLM router: probe all endpoints, select best for ashlrcode, gracefully degrade.
+llm_router_init
+llm_router_select ashlrcode
+
 # Primary mechanism: tell ashlrcode to use the workbench config dir.
 # (ashlrcode v2.1+ honors ASHLRCODE_CONFIG_DIR when set; falls back to ~/.ashlrcode.)
 export ASHLRCODE_CONFIG_DIR="$WB_CONFIG_DIR"
@@ -80,7 +86,7 @@ except Exception:
 fi
 
 _SE_AC_START="$(date +%s)"
-on_agent_start "ashlrcode" "$$" "${AC_MODEL:-unknown}" "$_SE_AC_MCP"
+on_agent_start "ashlrcode" "$$" "${AC_MODEL:-${LLM_PRIMARY:-unknown}}" "$_SE_AC_MCP"
 trap '
   _SE_AC_RC=$?
   _SE_AC_DUR=$(( $(date +%s) - _SE_AC_START ))

@@ -14,8 +14,9 @@ set -euo pipefail
 
 # shellcheck source=lib/config.sh
 . "$(dirname "$0")/lib/config.sh"
+# shellcheck source=lib/llm-router.sh
+. "$(dirname "$0")/lib/llm-router.sh"
 CONFIG="$WORKBENCH/agents/aider/aider.conf.yml"
-ENDPOINT="$LM_STUDIO_URL"
 
 # Resolve target project dir (first positional arg, default cwd)
 PROJECT_DIR="${1:-$(pwd)}"
@@ -26,12 +27,57 @@ if [ ! -d "$PROJECT_DIR" ]; then
   exit 1
 fi
 
-# Sanity check: LM Studio endpoint reachable
-if ! curl -fsS "$ENDPOINT/models" >/dev/null 2>&1; then
-  echo "start-aider: LM Studio endpoint $ENDPOINT not responding." >&2
-  echo "  Start LM Studio and load qwen/qwen3-coder-30b, then retry." >&2
+# LLM router: probe all endpoints, select best for aider, gracefully degrade.
+llm_router_init
+llm_router_select aider
+
+if [ "${LLM_PRIMARY_BACKEND:-none}" = "none" ]; then
+  echo "start-aider: no LLM endpoints available." >&2
+  echo "  Start LM Studio (port 1234) or Ollama (ollama serve), then retry." >&2
   exit 1
 fi
+
+echo "start-aider: routing → primary=${LLM_PRIMARY} (${LLM_PRIMARY_MS}ms)" >&2
+if [ "${LLM_FALLBACK_BACKEND:-none}" != "none" ]; then
+  echo "start-aider: fallback → ${LLM_FALLBACK} (${LLM_FALLBACK_MS}ms, threshold=${FALLBACK_THRESHOLD}ms)" >&2
+fi
+
+# Derive aider endpoint + model from the selected primary (or fallback if over threshold).
+_AIDER_PRIMARY_MS="${LLM_PRIMARY_MS:-99999}"
+_AIDER_THRESHOLD="${FALLBACK_THRESHOLD:-2000}"
+if [ "$_AIDER_PRIMARY_MS" -gt "$_AIDER_THRESHOLD" ] && [ "${LLM_FALLBACK_BACKEND:-none}" != "none" ]; then
+  echo "start-aider: primary latency ${_AIDER_PRIMARY_MS}ms > ${_AIDER_THRESHOLD}ms threshold — switching to fallback ${LLM_FALLBACK}" >&2
+  _AIDER_BACKEND="$LLM_FALLBACK_BACKEND"
+  _AIDER_MODEL="$LLM_FALLBACK_MODEL"
+  _AIDER_BASE_URL="$LLM_FALLBACK_URL"
+else
+  _AIDER_BACKEND="$LLM_PRIMARY_BACKEND"
+  _AIDER_MODEL="$LLM_PRIMARY_MODEL"
+  _AIDER_BASE_URL="$LLM_PRIMARY_URL"
+fi
+
+# Build aider model flag based on selected backend.
+case "$_AIDER_BACKEND" in
+  lmstudio|ollama)
+    AIDER_MODEL_FLAG="openai/${_AIDER_MODEL}"
+    AIDER_API_BASE="${_AIDER_BASE_URL}"
+    ;;
+  xai)
+    AIDER_MODEL_FLAG="${_AIDER_MODEL}"
+    AIDER_API_BASE="${_AIDER_BASE_URL}"
+    ;;
+  anthropic)
+    AIDER_MODEL_FLAG="${_AIDER_MODEL}"
+    AIDER_API_BASE=""
+    ;;
+  *)
+    AIDER_MODEL_FLAG="openai/${LM_STUDIO_MODEL}"
+    AIDER_API_BASE="${LM_STUDIO_URL}"
+    ;;
+esac
+export AIDER_MODEL_FLAG AIDER_API_BASE OPENAI_BASE_URL="${AIDER_API_BASE}"
+
+ENDPOINT="${_AIDER_BASE_URL:-${LM_STUDIO_URL}}"
 
 # Session log (cross-agent trace). Aider is interactive, so session_end fires
 # when the user quits the REPL.
@@ -59,7 +105,7 @@ except Exception:
     print(0)
 " 2>/dev/null || echo 0)"
 fi
-on_agent_start "aider" "$$" "lm-studio/qwen3-coder-30b" "$_SE_AIDER_MCP"
+on_agent_start "aider" "$$" "${_AIDER_BACKEND}/${_AIDER_MODEL}" "$_SE_AIDER_MCP"
 trap '
   _SE_AIDER_RC=$?
   _SE_AIDER_DUR=$(( $(date +%s) - _SE_AIDER_START ))
@@ -74,5 +120,11 @@ trap '
 
 cd "$PROJECT_DIR"
 # Run (don't exec) so the EXIT trap fires and writes session_end.
-aider --config "$CONFIG" "$@"
+# Pass routed model + API base; --model and --openai-api-base can be overridden
+# by the caller via extra args (they appear after, so they win).
+if [ -n "${AIDER_API_BASE:-}" ]; then
+  aider --config "$CONFIG" --model "$AIDER_MODEL_FLAG" --openai-api-base "$AIDER_API_BASE" "$@"
+else
+  aider --config "$CONFIG" --model "$AIDER_MODEL_FLAG" "$@"
+fi
 exit $?

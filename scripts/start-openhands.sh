@@ -30,13 +30,58 @@ AGENT_DIR="$REPO_ROOT/agents/openhands"
 # ---- config (all defaults live in scripts/lib/config.sh; override via env) ----
 # shellcheck source=lib/config.sh
 . "$SCRIPT_DIR/lib/config.sh"
+# shellcheck source=lib/llm-router.sh
+. "$SCRIPT_DIR/lib/llm-router.sh"
+
+# ---- LLM router: probe all endpoints, select best for openhands ----
+llm_router_init
+llm_router_select openhands
+
+# OpenHands runs in Docker and addresses LM Studio via host.docker.internal.
+# The router selected the best available host-side endpoint; translate its URL
+# to the in-container equivalent if it is a localhost address.
+_OH_PRIMARY_BACKEND="${LLM_PRIMARY_BACKEND:-lmstudio}"
+case "$_OH_PRIMARY_BACKEND" in
+  lmstudio)
+    # Use host.docker.internal for the container; keep localhost for host probes.
+    LLM_BASE_URL_OVERRIDE="$OPENHANDS_LLM_BASE_URL"   # host.docker.internal:1234/v1
+    LLM_MODEL_OVERRIDE="$OPENHANDS_LLM_MODEL"
+    LLM_API_KEY_OVERRIDE="$OPENHANDS_LLM_API_KEY"
+    ;;
+  ollama)
+    # Ollama also runs on the host; translate similarly.
+    LLM_BASE_URL_OVERRIDE="http://host.docker.internal:11434/v1"
+    LLM_MODEL_OVERRIDE="openai/${LLM_PRIMARY_MODEL:-${OLLAMA_MODEL_REASONING}}"
+    LLM_API_KEY_OVERRIDE="ollama"
+    ;;
+  xai)
+    LLM_BASE_URL_OVERRIDE="${XAI_BASE_URL:-https://api.x.ai/v1}"
+    LLM_MODEL_OVERRIDE="${LLM_PRIMARY_MODEL:-grok-3}"
+    LLM_API_KEY_OVERRIDE="${XAI_API_KEY:-}"
+    ;;
+  anthropic)
+    LLM_BASE_URL_OVERRIDE="https://api.anthropic.com/v1"
+    LLM_MODEL_OVERRIDE="${LLM_PRIMARY_MODEL:-claude-sonnet-4-5}"
+    LLM_API_KEY_OVERRIDE="${ANTHROPIC_API_KEY:-}"
+    ;;
+  *)
+    LLM_BASE_URL_OVERRIDE="$OPENHANDS_LLM_BASE_URL"
+    LLM_MODEL_OVERRIDE="$OPENHANDS_LLM_MODEL"
+    LLM_API_KEY_OVERRIDE="$OPENHANDS_LLM_API_KEY"
+    ;;
+esac
+
+log "LLM router → primary=${LLM_PRIMARY} (${LLM_PRIMARY_MS}ms)"
+if [ "${LLM_FALLBACK_BACKEND:-none}" != "none" ]; then
+  log "LLM router → fallback=${LLM_FALLBACK} (${LLM_FALLBACK_MS}ms, threshold=${FALLBACK_THRESHOLD}ms)"
+fi
 
 CONTAINER_NAME="$OPENHANDS_CONTAINER"
 IMAGE="$OPENHANDS_IMAGE"
 AGENT_SERVER_IMAGE="$OPENHANDS_AGENT_SERVER_IMAGE"
-LLM_BASE_URL="$OPENHANDS_LLM_BASE_URL"
-LLM_MODEL="$OPENHANDS_LLM_MODEL"
-LLM_API_KEY="$OPENHANDS_LLM_API_KEY"
+LLM_BASE_URL="${LLM_BASE_URL_OVERRIDE:-$OPENHANDS_LLM_BASE_URL}"
+LLM_MODEL="${LLM_MODEL_OVERRIDE:-$OPENHANDS_LLM_MODEL}"
+LLM_API_KEY="${LLM_API_KEY_OVERRIDE:-$OPENHANDS_LLM_API_KEY}"
 CONTEXT_LENGTH="$OPENHANDS_CONTEXT_LENGTH"
 PORT="$OPENHANDS_PORT"
 SANDBOX_RUNTIME_IMAGE="$OPENHANDS_SANDBOX_IMAGE"
