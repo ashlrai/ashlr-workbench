@@ -279,6 +279,124 @@ else
   _fail "start-openhands.sh: bash syntax error"
 fi
 
+# ─── Test 8: mcp-probe.sh library ────────────────────────────────────────────
+printf "\n\033[1mTest 8: mcp-probe.sh library\033[0m\n"
+
+MCP_PROBE_SH="$REPO_ROOT/scripts/lib/mcp-probe.sh"
+
+# 8a — file exists and is executable
+assert_file_executable "mcp-probe.sh is executable" "$MCP_PROBE_SH"
+
+# 8b — bash syntax check
+if bash -n "$MCP_PROBE_SH" 2>/dev/null; then
+  _ok "mcp-probe.sh passes bash syntax check"
+else
+  _fail "mcp-probe.sh has bash syntax errors"
+fi
+
+# 8c — double-source guard
+DOUBLE_PROBE="$(
+  env -i HOME="$HOME" bash -c "
+    . '$CONFIG_SH'
+    . '$MCP_PROBE_SH'
+    . '$MCP_PROBE_SH'
+    echo sourced_twice_ok
+  " 2>&1
+)"
+if printf '%s' "$DOUBLE_PROBE" | grep -q 'sourced_twice_ok'; then
+  _ok "mcp-probe.sh double-source guard works"
+else
+  _fail "mcp-probe.sh double-source produced errors: $DOUBLE_PROBE"
+fi
+
+# 8d — validate_mcp_servers is defined after sourcing
+FUNC_DEFINED="$(
+  env -i HOME="$HOME" bash -c "
+    . '$CONFIG_SH'
+    . '$MCP_PROBE_SH'
+    if declare -f validate_mcp_servers >/dev/null 2>&1; then
+      echo defined
+    else
+      echo missing
+    fi
+  " 2>&1
+)"
+assert_eq "validate_mcp_servers function is defined" "defined" "$FUNC_DEFINED"
+
+# 8e — _mcp_probe_one returns 3 for a missing file
+PROBE_MISSING="$(
+  env -i HOME="$HOME" bash -c "
+    . '$CONFIG_SH'
+    . '$MCP_PROBE_SH'
+    _mcp_probe_one test-server /nonexistent/server.ts
+    echo rc=\$?
+  " 2>&1
+)"
+assert_eq "_mcp_probe_one rc=3 for missing file" "rc=3" "$(printf '%s' "$PROBE_MISSING" | grep '^rc=')"
+
+# 8f — _mcp_probe_one returns 4 when runtime absent (simulate via PATH override)
+PROBE_NO_RUNTIME="$(
+  env -i HOME="$HOME" PATH="/usr/bin:/bin" bash -c "
+    . '$CONFIG_SH'
+    . '$MCP_PROBE_SH'
+    # Use a real file but make sure bun/node are not on PATH
+    tmpfile=\"\$(mktemp /tmp/mcp-probe-test-XXXXXX.ts)\"
+    echo 'console.log(\"hello\")' > \"\$tmpfile\"
+    _mcp_probe_one test-server \"\$tmpfile\"
+    rc=\$?
+    rm -f \"\$tmpfile\"
+    echo rc=\$rc
+  " 2>&1
+)"
+assert_eq "_mcp_probe_one rc=4 when runtime absent" "rc=4" "$(printf '%s' "$PROBE_NO_RUNTIME" | grep '^rc=')"
+
+# 8g — _mcp_fix_hint emits a bun-install hint for rc=2 (module-not-found crash)
+FIX_HINT="$(
+  env -i HOME="$HOME" ASHLR_PLUGIN_DIR="/tmp/fake-plugin" bash -c "
+    . '$CONFIG_SH'
+    . '$MCP_PROBE_SH'
+    _mcp_fix_hint bash-server 2 'Cannot find module @modelcontextprotocol/sdk'
+  " 2>&1
+)"
+if printf '%s' "$FIX_HINT" | grep -qi 'bun install'; then
+  _ok "_mcp_fix_hint suggests 'bun install' for missing-module crash"
+else
+  _fail "_mcp_fix_hint did not suggest 'bun install' (got: $FIX_HINT)"
+fi
+
+# 8h — validate_mcp_servers handles missing plugin dir gracefully (no crash)
+VALIDATE_NO_DIR="$(
+  env -i HOME="$HOME" ASHLR_PLUGIN_DIR="/tmp/definitely-does-not-exist-$$" bash -c "
+    . '$CONFIG_SH'
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); }
+    warn() { WARN=\$((WARN+1)); }
+    bad()  { FAIL=\$((FAIL+1)); printf '%s\n' \"\$*\"; }
+    . '$MCP_PROBE_SH'
+    validate_mcp_servers
+    echo exit_ok
+  " 2>&1
+)"
+if printf '%s' "$VALIDATE_NO_DIR" | grep -q 'exit_ok'; then
+  _ok "validate_mcp_servers exits cleanly when plugin dir is missing"
+else
+  _fail "validate_mcp_servers crashed with missing plugin dir: $VALIDATE_NO_DIR"
+fi
+
+# 8i — healthcheck.sh sources mcp-probe.sh
+if grep -q 'mcp-probe.sh' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh sources mcp-probe.sh"
+else
+  _fail "healthcheck.sh does not source mcp-probe.sh"
+fi
+
+# 8j — healthcheck.sh calls validate_mcp_servers
+if grep -q 'validate_mcp_servers' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh calls validate_mcp_servers"
+else
+  _fail "healthcheck.sh does not call validate_mcp_servers"
+fi
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n"
 if [ "$FAIL" -eq 0 ]; then

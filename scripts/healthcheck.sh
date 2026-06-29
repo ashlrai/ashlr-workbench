@@ -27,6 +27,10 @@ LM_STUDIO_URL="${LM_STUDIO_URL:-http://localhost:1234/v1}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 OPENHANDS_CONTAINER="ashlr-openhands"
 
+# Source the MCP probe library (provides validate_mcp_servers).
+# shellcheck source=scripts/lib/mcp-probe.sh
+. "$SCRIPT_DIR/lib/mcp-probe.sh"
+
 # ─── Colors ───────────────────────────────────────────────────────────────────
 if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then
   C_RESET=""; C_RED=""; C_GREEN=""; C_YELLOW=""; C_BOLD=""; C_DIM=""
@@ -53,6 +57,10 @@ elif docker info >/dev/null 2>&1; then
 else
   bad "docker daemon not running (start Docker Desktop)"
 fi
+
+# ─── 1b. MCP server liveliness ────────────────────────────────────────────────
+section "MCP Server Liveliness"
+validate_mcp_servers
 
 # ─── 2. LM Studio ─────────────────────────────────────────────────────────────
 section "LM Studio ($LM_STUDIO_URL)"
