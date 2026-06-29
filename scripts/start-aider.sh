@@ -85,6 +85,8 @@ ENDPOINT="${_AIDER_BASE_URL:-${LM_STUDIO_URL}}"
 . "$(dirname "$0")/lib/session-log.sh"
 # shellcheck source=lib/session-events.sh
 . "$(dirname "$0")/lib/session-events.sh"
+# shellcheck source=lib/session-replay-log.sh
+. "$(dirname "$0")/lib/session-replay-log.sh"
 log_session_start aider "$PROJECT_DIR"
 _SE_AIDER_START="$(date +%s)"
 # Determine MCP count from aider config (yaml entries under mcp-servers key)
@@ -106,14 +108,17 @@ except Exception:
 " 2>/dev/null || echo 0)"
 fi
 on_agent_start "aider" "$$" "${_AIDER_BACKEND}/${_AIDER_MODEL}" "$_SE_AIDER_MCP"
+replay_session_init "aider" "${_AIDER_BACKEND}/${_AIDER_MODEL}" "$_SE_AIDER_MCP" "$PROJECT_DIR"
 trap '
   _SE_AIDER_RC=$?
   _SE_AIDER_DUR=$(( $(date +%s) - _SE_AIDER_START ))
   if [ "$_SE_AIDER_RC" -ne 0 ]; then
     on_agent_error "aider" "$_SE_AIDER_RC" "exit code $_SE_AIDER_RC"
     on_session_end "aider" "$_SE_AIDER_DUR" "error"
+    replay_session_end "aider" "$_SE_AIDER_DUR" "error"
   else
     on_session_end "aider" "$_SE_AIDER_DUR" "ok"
+    replay_session_end "aider" "$_SE_AIDER_DUR" "ok"
   fi
   log_session_end aider "$PROJECT_DIR"
 ' EXIT

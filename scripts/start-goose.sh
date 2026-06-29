@@ -86,6 +86,8 @@ export OPENAI_HOST="${LLM_PRIMARY_URL:-http://localhost:1234}"
 . "$script_dir/lib/session-log.sh"
 # shellcheck source=lib/session-events.sh
 . "$script_dir/lib/session-events.sh"
+# shellcheck source=lib/session-replay-log.sh
+. "$script_dir/lib/session-replay-log.sh"
 log_session_start goose "$GOOSE_WORKSPACE"
 
 # Derive MCP count from the source config YAML (count extension entries)
@@ -132,14 +134,17 @@ fi
 
 _SE_GOOSE_START="$(date +%s)"
 on_agent_start "goose" "$$" "${LLM_PRIMARY_BACKEND:-lm-studio}/${LLM_PRIMARY_MODEL:-qwen3-coder-30b}" "$_SE_GOOSE_MCP"
+replay_session_init "goose" "${LLM_PRIMARY_BACKEND:-lm-studio}/${LLM_PRIMARY_MODEL:-qwen3-coder-30b}" "$_SE_GOOSE_MCP" "$GOOSE_WORKSPACE"
 trap '
   _SE_GOOSE_RC=$?
   _SE_GOOSE_DUR=$(( $(date +%s) - _SE_GOOSE_START ))
   if [ "$_SE_GOOSE_RC" -ne 0 ]; then
     on_agent_error "goose" "$_SE_GOOSE_RC" "exit code $_SE_GOOSE_RC"
     on_session_end "goose" "$_SE_GOOSE_DUR" "error"
+    replay_session_end "goose" "$_SE_GOOSE_DUR" "error"
   else
     on_session_end "goose" "$_SE_GOOSE_DUR" "ok"
+    replay_session_end "goose" "$_SE_GOOSE_DUR" "ok"
   fi
   log_session_end goose "$GOOSE_WORKSPACE"
 ' EXIT

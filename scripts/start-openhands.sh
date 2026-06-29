@@ -107,6 +107,8 @@ err() { printf "\033[31m[start]\033[0m %s\n" "$*" >&2; }
 . "$SCRIPT_DIR/lib/session-log.sh"
 # shellcheck source=lib/session-events.sh
 . "$SCRIPT_DIR/lib/session-events.sh"
+# shellcheck source=lib/session-replay-log.sh
+. "$SCRIPT_DIR/lib/session-replay-log.sh"
 log_session_start openhands "$WORKSPACE_HOST"
 
 # Derive MCP count from mcp.json stdio_servers array
@@ -137,14 +139,17 @@ fi
 
 _SE_OH_START="$(date +%s)"
 on_agent_start "openhands" "$$" "$LLM_MODEL" "$_SE_OH_MCP"
+replay_session_init "openhands" "$LLM_MODEL" "$_SE_OH_MCP" "$WORKSPACE_HOST"
 trap '
   _SE_OH_RC=$?
   _SE_OH_DUR=$(( $(date +%s) - _SE_OH_START ))
   if [ "$_SE_OH_RC" -ne 0 ]; then
     on_agent_error "openhands" "$_SE_OH_RC" "launcher exit code $_SE_OH_RC"
     on_session_end "openhands" "$_SE_OH_DUR" "error"
+    replay_session_end "openhands" "$_SE_OH_DUR" "error"
   else
     on_session_end "openhands" "$_SE_OH_DUR" "ok"
+    replay_session_end "openhands" "$_SE_OH_DUR" "ok"
   fi
   log_session_end openhands "$WORKSPACE_HOST"
 ' EXIT

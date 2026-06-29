@@ -69,6 +69,8 @@ export ASHLR_MCP_EXTRA="$WB_SETTINGS"
 . "$(dirname "$0")/lib/session-log.sh"
 # shellcheck source=lib/session-events.sh
 . "$(dirname "$0")/lib/session-events.sh"
+# shellcheck source=lib/session-replay-log.sh
+. "$(dirname "$0")/lib/session-replay-log.sh"
 log_session_start ashlrcode "$PWD"
 
 # Derive MCP count from workbench settings.json
@@ -87,14 +89,17 @@ fi
 
 _SE_AC_START="$(date +%s)"
 on_agent_start "ashlrcode" "$$" "${AC_MODEL:-${LLM_PRIMARY:-unknown}}" "$_SE_AC_MCP"
+replay_session_init "ashlrcode" "${AC_MODEL:-${LLM_PRIMARY:-unknown}}" "$_SE_AC_MCP" "$PWD"
 trap '
   _SE_AC_RC=$?
   _SE_AC_DUR=$(( $(date +%s) - _SE_AC_START ))
   if [ "$_SE_AC_RC" -ne 0 ]; then
     on_agent_error "ashlrcode" "$_SE_AC_RC" "exit code $_SE_AC_RC"
     on_session_end "ashlrcode" "$_SE_AC_DUR" "error"
+    replay_session_end "ashlrcode" "$_SE_AC_DUR" "error"
   else
     on_session_end "ashlrcode" "$_SE_AC_DUR" "ok"
+    replay_session_end "ashlrcode" "$_SE_AC_DUR" "ok"
   fi
   log_session_end ashlrcode "$PWD"
 ' EXIT

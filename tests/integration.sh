@@ -2690,6 +2690,520 @@ else
   _fail "healthcheck.sh does not call config_registry_check_all"
 fi
 
+# ─── Test 18: session-replay-log.sh library + session-replay.sh harness ───────
+printf "\n\033[1mTest 18: session-replay-log.sh + session-replay.sh\033[0m\n"
+
+REPLAY_LOG_SH="$REPO_ROOT/scripts/lib/session-replay-log.sh"
+REPLAY_SH="$REPO_ROOT/scripts/session-replay.sh"
+
+# 18a — session-replay-log.sh exists and is executable
+assert_file_executable "session-replay-log.sh is executable" "$REPLAY_LOG_SH"
+
+# 18b — session-replay-log.sh passes bash syntax check
+if bash -n "$REPLAY_LOG_SH" 2>/dev/null; then
+  _ok "session-replay-log.sh passes bash syntax check"
+else
+  _fail "session-replay-log.sh has bash syntax errors"
+fi
+
+# 18c — double-source guard
+DOUBLE_RPL="$(
+  env -i HOME="$HOME" bash -c "
+    . '$REPLAY_LOG_SH'
+    . '$REPLAY_LOG_SH'
+    echo sourced_twice_ok
+  " 2>&1
+)"
+if printf '%s' "$DOUBLE_RPL" | grep -q 'sourced_twice_ok'; then
+  _ok "session-replay-log.sh double-source guard works"
+else
+  _fail "session-replay-log.sh double-source produced errors: $DOUBLE_RPL"
+fi
+
+# 18d — all four public functions defined after sourcing
+for fn in replay_session_init replay_tool_call replay_llm_response replay_session_end; do
+  RPL_FUNC="$(
+    env -i HOME="$HOME" bash -c "
+      . '$REPLAY_LOG_SH'
+      if declare -f $fn >/dev/null 2>&1; then echo defined; else echo missing; fi
+    " 2>&1
+  )"
+  assert_eq "$fn function is defined" "defined" "$RPL_FUNC"
+done
+
+# 18e — replay_session_init emits a valid session_init JSONL event
+RPL_TMP="$(mktemp /tmp/rpl-test-XXXXXX.jsonl)"
+RPL_INIT_OUT="$(
+  env -i HOME="$HOME" ASHLR_REPLAY_LOG_PATH="$RPL_TMP" bash -c "
+    . '$REPLAY_LOG_SH'
+    replay_session_init 'aider' 'lmstudio/qwen3-coder-30b' '5' '/tmp/project'
+    cat '$RPL_TMP'
+  " 2>&1
+)"
+rm -f "$RPL_TMP"
+RPL_INIT_OK="$(printf '%s' "$RPL_INIT_OUT" | python3 -c "
+import sys, json
+line = sys.stdin.read().strip()
+try:
+    o = json.loads(line)
+    assert o.get('event')        == 'session_init',            f'bad event: {o}'
+    assert o.get('agent')        == 'aider',                   f'bad agent: {o}'
+    assert o.get('llm_endpoint') == 'lmstudio/qwen3-coder-30b', f'bad llm_endpoint: {o}'
+    assert o.get('mcp_count')    == '5',                       f'bad mcp_count: {o}'
+    assert o.get('cwd')          == '/tmp/project',            f'bad cwd: {o}'
+    assert 'session' in o,                                     f'missing session: {o}'
+    assert 'ts' in o,                                          f'missing ts: {o}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "replay_session_init emits valid JSONL with correct fields" "ok" "$RPL_INIT_OK"
+
+# 18f — replay_tool_call emits a valid tool_call JSONL event
+RPL_TMP="$(mktemp /tmp/rpl-test-XXXXXX.jsonl)"
+RPL_TOOL_OUT="$(
+  env -i HOME="$HOME" ASHLR_REPLAY_LOG_PATH="$RPL_TMP" bash -c "
+    . '$REPLAY_LOG_SH'
+    replay_tool_call 'goose' 'Read' 'src/main.py' '42'
+    cat '$RPL_TMP'
+  " 2>&1
+)"
+rm -f "$RPL_TMP"
+RPL_TOOL_OK="$(printf '%s' "$RPL_TOOL_OUT" | python3 -c "
+import sys, json
+line = sys.stdin.read().strip()
+try:
+    o = json.loads(line)
+    assert o.get('event')      == 'tool_call',     f'bad event: {o}'
+    assert o.get('agent')      == 'goose',          f'bad agent: {o}'
+    assert o.get('tool')       == 'Read',           f'bad tool: {o}'
+    assert o.get('args')       == 'src/main.py',    f'bad args: {o}'
+    assert o.get('latency_ms') == '42',             f'bad latency_ms: {o}'
+    assert o.get('seq')        == '1',              f'bad seq: {o}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "replay_tool_call emits valid JSONL with correct fields" "ok" "$RPL_TOOL_OK"
+
+# 18g — replay_llm_response emits a valid llm_response JSONL event
+RPL_TMP="$(mktemp /tmp/rpl-test-XXXXXX.jsonl)"
+RPL_LLM_OUT="$(
+  env -i HOME="$HOME" ASHLR_REPLAY_LOG_PATH="$RPL_TMP" bash -c "
+    . '$REPLAY_LOG_SH'
+    replay_llm_response 'aider' 'qwen3-coder-30b' '512' '256' '1200'
+    cat '$RPL_TMP'
+  " 2>&1
+)"
+rm -f "$RPL_TMP"
+RPL_LLM_OK="$(printf '%s' "$RPL_LLM_OUT" | python3 -c "
+import sys, json
+line = sys.stdin.read().strip()
+try:
+    o = json.loads(line)
+    assert o.get('event')              == 'llm_response',      f'bad event: {o}'
+    assert o.get('agent')              == 'aider',             f'bad agent: {o}'
+    assert o.get('model')              == 'qwen3-coder-30b',   f'bad model: {o}'
+    assert o.get('prompt_tokens')      == '512',               f'bad prompt_tokens: {o}'
+    assert o.get('completion_tokens')  == '256',               f'bad completion_tokens: {o}'
+    assert o.get('latency_ms')         == '1200',              f'bad latency_ms: {o}'
+    assert o.get('turn')               == '1',                 f'bad turn: {o}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "replay_llm_response emits valid JSONL with correct fields" "ok" "$RPL_LLM_OK"
+
+# 18h — replay_session_end emits a valid session_end JSONL event
+RPL_TMP="$(mktemp /tmp/rpl-test-XXXXXX.jsonl)"
+RPL_END_OUT="$(
+  env -i HOME="$HOME" ASHLR_REPLAY_LOG_PATH="$RPL_TMP" bash -c "
+    . '$REPLAY_LOG_SH'
+    replay_session_end 'aider' '90' 'ok' '7' '3'
+    cat '$RPL_TMP'
+  " 2>&1
+)"
+rm -f "$RPL_TMP"
+RPL_END_OK="$(printf '%s' "$RPL_END_OUT" | python3 -c "
+import sys, json
+line = sys.stdin.read().strip()
+try:
+    o = json.loads(line)
+    assert o.get('event')         == 'session_end', f'bad event: {o}'
+    assert o.get('agent')         == 'aider',       f'bad agent: {o}'
+    assert o.get('duration_secs') == '90',          f'bad duration_secs: {o}'
+    assert o.get('status')        == 'ok',          f'bad status: {o}'
+    assert o.get('tool_count')    == '7',           f'bad tool_count: {o}'
+    assert o.get('llm_turns')     == '3',           f'bad llm_turns: {o}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "replay_session_end emits valid JSONL with correct fields" "ok" "$RPL_END_OK"
+
+# 18i — ASHLR_REPLAY_LOG=0 kill switch suppresses all writes
+RPL_TMP="$(mktemp /tmp/rpl-test-XXXXXX.jsonl)"
+RPL_KILL_OUT="$(
+  env -i HOME="$HOME" \
+    ASHLR_REPLAY_LOG="0" \
+    ASHLR_REPLAY_LOG_PATH="$RPL_TMP" bash -c "
+    . '$REPLAY_LOG_SH'
+    replay_session_init 'aider' 'test-model' '0' '/tmp'
+    replay_tool_call    'aider' 'Read' 'file.py' '10'
+    replay_session_end  'aider' '5' 'ok' '1' '0'
+    wc -l < '$RPL_TMP' | tr -d ' '
+  " 2>&1
+)"
+rm -f "$RPL_TMP"
+assert_eq "ASHLR_REPLAY_LOG=0 suppresses all replay writes" "0" "$RPL_KILL_OUT"
+
+# 18j — session id stable across all events in one shell (correlation)
+RPL_TMP="$(mktemp /tmp/rpl-test-XXXXXX.jsonl)"
+RPL_CORR_OUT="$(
+  env -i HOME="$HOME" ASHLR_REPLAY_LOG_PATH="$RPL_TMP" bash -c "
+    . '$REPLAY_LOG_SH'
+    replay_session_init 'goose' 'lmstudio/qwen3' '3' '/tmp'
+    replay_tool_call    'goose' 'Bash' 'ls' '5'
+    replay_session_end  'goose' '10' 'ok' '1' '0'
+    python3 -c \"
+import json, sys
+lines = [json.loads(l) for l in open('$RPL_TMP') if l.strip()]
+ids = set(o.get('session','') for o in lines)
+print('correlated' if len(ids) == 1 and '' not in ids else f'not-correlated:{ids}')
+\"
+  " 2>&1
+)"
+rm -f "$RPL_TMP"
+assert_eq "replay session id correlates across all event types" "correlated" "$RPL_CORR_OUT"
+
+# 18k — seq counter increments across multiple tool_call events
+RPL_TMP="$(mktemp /tmp/rpl-test-XXXXXX.jsonl)"
+RPL_SEQ_OUT="$(
+  env -i HOME="$HOME" ASHLR_REPLAY_LOG_PATH="$RPL_TMP" bash -c "
+    . '$REPLAY_LOG_SH'
+    replay_tool_call 'aider' 'Read'  'a.py' '10'
+    replay_tool_call 'aider' 'Write' 'b.py' '20'
+    replay_tool_call 'aider' 'Bash'  'ls'   '5'
+    python3 -c \"
+import json, sys
+lines = [json.loads(l) for l in open('$RPL_TMP') if l.strip()]
+seqs = [o.get('seq') for o in lines]
+print('ok' if seqs == ['1','2','3'] else f'fail:{seqs}')
+\"
+  " 2>&1
+)"
+rm -f "$RPL_TMP"
+assert_eq "replay seq counter increments across tool_call events" "ok" "$RPL_SEQ_OUT"
+
+# 18l — session-replay.sh exists and is executable
+assert_file_executable "session-replay.sh is executable" "$REPLAY_SH"
+
+# 18m — session-replay.sh passes bash syntax check
+if bash -n "$REPLAY_SH" 2>/dev/null; then
+  _ok "session-replay.sh passes bash syntax check"
+else
+  _fail "session-replay.sh has bash syntax errors"
+fi
+
+# 18n — session-replay.sh help exits 0 and mentions key subcommands
+RPL_HELP="$(
+  env -i HOME="$HOME" NO_COLOR=1 bash -c "'$REPLAY_SH' help" 2>&1
+)"
+RPL_HELP_RC=$?
+if [ "$RPL_HELP_RC" -eq 0 ]; then
+  _ok "session-replay.sh help exits 0"
+else
+  _fail "session-replay.sh help exited $RPL_HELP_RC"
+fi
+for subcmd in compare diff export analyze-divergence list; do
+  if printf '%s' "$RPL_HELP" | grep -q "$subcmd"; then
+    _ok "session-replay.sh help mentions subcommand: $subcmd"
+  else
+    _fail "session-replay.sh help missing subcommand: $subcmd  (got: $RPL_HELP)"
+  fi
+done
+
+# 18o — session-replay.sh list runs cleanly on a synthetic log
+RPL_TMP="$(mktemp /tmp/rpl-test-XXXXXX.jsonl)"
+python3 -c "
+import json, datetime
+now = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.000Z')
+events = [
+    {'ts': now, 'event': 'session_init',  'agent': 'aider',  'session': 'sid001',
+     'llm_endpoint': 'lmstudio/qwen3-coder-30b', 'mcp_count': '5', 'cwd': '/tmp', 'pid': '100'},
+    {'ts': now, 'event': 'tool_call',     'agent': 'aider',  'session': 'sid001',
+     'tool': 'Read', 'args': 'main.py', 'latency_ms': '30', 'seq': '1'},
+    {'ts': now, 'event': 'session_end',   'agent': 'aider',  'session': 'sid001',
+     'duration_secs': '60', 'status': 'ok', 'tool_count': '1', 'llm_turns': '0'},
+    {'ts': now, 'event': 'session_init',  'agent': 'goose',  'session': 'sid002',
+     'llm_endpoint': 'ollama/llama3.2', 'mcp_count': '3', 'cwd': '/tmp', 'pid': '200'},
+    {'ts': now, 'event': 'tool_call',     'agent': 'goose',  'session': 'sid002',
+     'tool': 'Bash', 'args': 'ls', 'latency_ms': '15', 'seq': '1'},
+    {'ts': now, 'event': 'session_end',   'agent': 'goose',  'session': 'sid002',
+     'duration_secs': '45', 'status': 'ok', 'tool_count': '1', 'llm_turns': '0'},
+]
+for e in events:
+    print(json.dumps(e))
+" > "$RPL_TMP"
+
+RPL_LIST_OUT="$(
+  env -i HOME="$HOME" NO_COLOR=1 \
+    ASHLR_REPLAY_LOG_PATH="$RPL_TMP" \
+    bash -c "'$REPLAY_SH' list" 2>&1
+)"
+rm -f "$RPL_TMP"
+if printf '%s' "$RPL_LIST_OUT" | grep -q 'aider'; then
+  _ok "session-replay.sh list output mentions aider"
+else
+  _fail "session-replay.sh list missing aider (got: $RPL_LIST_OUT)"
+fi
+if printf '%s' "$RPL_LIST_OUT" | grep -q 'goose'; then
+  _ok "session-replay.sh list output mentions goose"
+else
+  _fail "session-replay.sh list missing goose"
+fi
+
+# 18p — session-replay.sh compare produces side-by-side output
+RPL_TMP="$(mktemp /tmp/rpl-test-XXXXXX.jsonl)"
+python3 -c "
+import json, datetime
+now = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.000Z')
+events = [
+    {'ts': now, 'event': 'session_init', 'agent': 'aider', 'session': 'cmp001',
+     'llm_endpoint': 'lmstudio/qwen3', 'mcp_count': '5', 'cwd': '/tmp', 'pid': '1'},
+    {'ts': now, 'event': 'tool_call', 'agent': 'aider', 'session': 'cmp001',
+     'tool': 'Read', 'args': 'a.py', 'latency_ms': '10', 'seq': '1'},
+    {'ts': now, 'event': 'tool_call', 'agent': 'aider', 'session': 'cmp001',
+     'tool': 'Write', 'args': 'b.py', 'latency_ms': '20', 'seq': '2'},
+    {'ts': now, 'event': 'session_end', 'agent': 'aider', 'session': 'cmp001',
+     'duration_secs': '30', 'status': 'ok', 'tool_count': '2', 'llm_turns': '1'},
+    {'ts': now, 'event': 'session_init', 'agent': 'goose', 'session': 'cmp002',
+     'llm_endpoint': 'ollama/llama3', 'mcp_count': '3', 'cwd': '/tmp', 'pid': '2'},
+    {'ts': now, 'event': 'tool_call', 'agent': 'goose', 'session': 'cmp002',
+     'tool': 'Bash', 'args': 'ls', 'latency_ms': '5', 'seq': '1'},
+    {'ts': now, 'event': 'tool_call', 'agent': 'goose', 'session': 'cmp002',
+     'tool': 'Read', 'args': 'c.py', 'latency_ms': '8', 'seq': '2'},
+    {'ts': now, 'event': 'session_end', 'agent': 'goose', 'session': 'cmp002',
+     'duration_secs': '20', 'status': 'ok', 'tool_count': '2', 'llm_turns': '1'},
+]
+for e in events:
+    print(json.dumps(e))
+" > "$RPL_TMP"
+
+RPL_CMP_OUT="$(
+  env -i HOME="$HOME" NO_COLOR=1 \
+    ASHLR_REPLAY_LOG_PATH="$RPL_TMP" \
+    bash -c "'$REPLAY_SH' compare cmp001 cmp002" 2>&1
+)"
+rm -f "$RPL_TMP"
+if printf '%s' "$RPL_CMP_OUT" | grep -qi 'TOOL CALL SEQUENCE\|DIVERGENCE'; then
+  _ok "session-replay.sh compare produces divergence output"
+else
+  _fail "session-replay.sh compare missing TOOL CALL SEQUENCE/DIVERGENCE (got: $RPL_CMP_OUT)"
+fi
+if printf '%s' "$RPL_CMP_OUT" | grep -q 'cmp001'; then
+  _ok "session-replay.sh compare shows session id 1"
+else
+  _fail "session-replay.sh compare missing session id 1"
+fi
+if printf '%s' "$RPL_CMP_OUT" | grep -q 'cmp002'; then
+  _ok "session-replay.sh compare shows session id 2"
+else
+  _fail "session-replay.sh compare missing session id 2"
+fi
+
+# 18q — session-replay.sh diff shows variance vs baseline
+RPL_TMP="$(mktemp /tmp/rpl-test-XXXXXX.jsonl)"
+python3 -c "
+import json, datetime
+now = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.000Z')
+events = [
+    {'ts': now, 'event': 'session_init', 'agent': 'aider', 'session': 'base01',
+     'llm_endpoint': 'lmstudio/qwen3', 'mcp_count': '5', 'cwd': '/tmp', 'pid': '1'},
+    {'ts': now, 'event': 'tool_call', 'agent': 'aider', 'session': 'base01',
+     'tool': 'Read', 'args': 'a.py', 'latency_ms': '10', 'seq': '1'},
+    {'ts': now, 'event': 'tool_call', 'agent': 'aider', 'session': 'base01',
+     'tool': 'Write', 'args': 'b.py', 'latency_ms': '20', 'seq': '2'},
+    {'ts': now, 'event': 'session_end', 'agent': 'aider', 'session': 'base01',
+     'duration_secs': '30', 'status': 'ok', 'tool_count': '2', 'llm_turns': '0'},
+    {'ts': now, 'event': 'session_init', 'agent': 'goose', 'session': 'tgt01',
+     'llm_endpoint': 'ollama/llama3', 'mcp_count': '3', 'cwd': '/tmp', 'pid': '2'},
+    {'ts': now, 'event': 'tool_call', 'agent': 'goose', 'session': 'tgt01',
+     'tool': 'Bash', 'args': 'ls', 'latency_ms': '5', 'seq': '1'},
+    {'ts': now, 'event': 'tool_call', 'agent': 'goose', 'session': 'tgt01',
+     'tool': 'Read', 'args': 'c.py', 'latency_ms': '8', 'seq': '2'},
+    {'ts': now, 'event': 'session_end', 'agent': 'goose', 'session': 'tgt01',
+     'duration_secs': '20', 'status': 'ok', 'tool_count': '2', 'llm_turns': '0'},
+]
+for e in events:
+    print(json.dumps(e))
+" > "$RPL_TMP"
+
+RPL_DIFF_OUT="$(
+  env -i HOME="$HOME" NO_COLOR=1 \
+    ASHLR_REPLAY_LOG_PATH="$RPL_TMP" \
+    bash -c "'$REPLAY_SH' diff tgt01" 2>&1
+)"
+rm -f "$RPL_TMP"
+if printf '%s' "$RPL_DIFF_OUT" | grep -qi 'TOOL SELECTION\|POSITIONAL\|VARIANCE'; then
+  _ok "session-replay.sh diff produces variance output"
+else
+  _fail "session-replay.sh diff missing variance output (got: $RPL_DIFF_OUT)"
+fi
+
+# 18r — session-replay.sh export --format json produces valid JSON array
+RPL_TMP="$(mktemp /tmp/rpl-test-XXXXXX.jsonl)"
+python3 -c "
+import json, datetime
+now = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.000Z')
+events = [
+    {'ts': now, 'event': 'session_init', 'agent': 'aider', 'session': 'exp001',
+     'llm_endpoint': 'lmstudio/qwen3', 'mcp_count': '2', 'cwd': '/tmp', 'pid': '1'},
+    {'ts': now, 'event': 'session_end', 'agent': 'aider', 'session': 'exp001',
+     'duration_secs': '10', 'status': 'ok', 'tool_count': '0', 'llm_turns': '0'},
+]
+for e in events:
+    print(json.dumps(e))
+" > "$RPL_TMP"
+
+RPL_JSON_OUT="$(
+  env -i HOME="$HOME" NO_COLOR=1 \
+    ASHLR_REPLAY_LOG_PATH="$RPL_TMP" \
+    bash -c "'$REPLAY_SH' export exp001 --format json" 2>&1
+)"
+rm -f "$RPL_TMP"
+RPL_JSON_VALID="$(printf '%s' "$RPL_JSON_OUT" | python3 -c "
+import sys, json
+try:
+    data = json.loads(sys.stdin.read())
+    assert isinstance(data, list), 'not a list'
+    assert len(data) == 2, f'expected 2 events, got {len(data)}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "session-replay.sh export --format json produces valid JSON array" "ok" "$RPL_JSON_VALID"
+
+# 18s — session-replay.sh export --format csv produces CSV with header
+RPL_TMP="$(mktemp /tmp/rpl-test-XXXXXX.jsonl)"
+python3 -c "
+import json, datetime
+now = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.000Z')
+events = [
+    {'ts': now, 'event': 'session_init', 'agent': 'goose', 'session': 'csv001',
+     'llm_endpoint': 'ollama/llama3', 'mcp_count': '1', 'cwd': '/tmp', 'pid': '2'},
+    {'ts': now, 'event': 'session_end', 'agent': 'goose', 'session': 'csv001',
+     'duration_secs': '5', 'status': 'ok', 'tool_count': '0', 'llm_turns': '0'},
+]
+for e in events:
+    print(json.dumps(e))
+" > "$RPL_TMP"
+
+RPL_CSV_OUT="$(
+  env -i HOME="$HOME" NO_COLOR=1 \
+    ASHLR_REPLAY_LOG_PATH="$RPL_TMP" \
+    bash -c "'$REPLAY_SH' export csv001 --format csv" 2>&1
+)"
+rm -f "$RPL_TMP"
+if printf '%s' "$RPL_CSV_OUT" | head -1 | grep -q 'event'; then
+  _ok "session-replay.sh export --format csv produces CSV with header"
+else
+  _fail "session-replay.sh export --format csv missing header (got: $RPL_CSV_OUT)"
+fi
+
+# 18t — session-replay.sh analyze-divergence runs cleanly on a synthetic log
+RPL_TMP="$(mktemp /tmp/rpl-test-XXXXXX.jsonl)"
+python3 -c "
+import json, datetime
+now = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.000Z')
+events = [
+    {'ts': now, 'event': 'session_init', 'agent': 'aider', 'session': 'adiv1',
+     'llm_endpoint': 'lmstudio/qwen3', 'mcp_count': '5', 'cwd': '/tmp', 'pid': '1'},
+    {'ts': now, 'event': 'tool_call', 'agent': 'aider', 'session': 'adiv1',
+     'tool': 'Read', 'args': 'a.py', 'latency_ms': '100', 'seq': '1'},
+    {'ts': now, 'event': 'session_end', 'agent': 'aider', 'session': 'adiv1',
+     'duration_secs': '60', 'status': 'ok', 'tool_count': '1', 'llm_turns': '1'},
+    {'ts': now, 'event': 'session_init', 'agent': 'goose', 'session': 'adiv2',
+     'llm_endpoint': 'ollama/llama3', 'mcp_count': '3', 'cwd': '/tmp', 'pid': '2'},
+    {'ts': now, 'event': 'tool_call', 'agent': 'goose', 'session': 'adiv2',
+     'tool': 'Bash', 'args': 'ls', 'latency_ms': '500', 'seq': '1'},
+    {'ts': now, 'event': 'session_end', 'agent': 'goose', 'session': 'adiv2',
+     'duration_secs': '30', 'status': 'ok', 'tool_count': '1', 'llm_turns': '0'},
+]
+for e in events:
+    print(json.dumps(e))
+" > "$RPL_TMP"
+
+RPL_DIVG_OUT="$(
+  env -i HOME="$HOME" NO_COLOR=1 \
+    ASHLR_REPLAY_LOG_PATH="$RPL_TMP" \
+    bash -c "'$REPLAY_SH' analyze-divergence" 2>&1
+)"
+RPL_DIVG_RC=$?
+rm -f "$RPL_TMP"
+if [ "$RPL_DIVG_RC" -eq 0 ]; then
+  _ok "session-replay.sh analyze-divergence exits 0"
+else
+  _fail "session-replay.sh analyze-divergence exited $RPL_DIVG_RC"
+fi
+for section in "PER-AGENT SUMMARY" "TOOL PREFERENCE MATRIX" "PERFORMANCE GAP FLAGS"; do
+  if printf '%s' "$RPL_DIVG_OUT" | grep -qi "$section"; then
+    _ok "analyze-divergence output contains '$section'"
+  else
+    _fail "analyze-divergence output missing '$section' (got: $RPL_DIVG_OUT)"
+  fi
+done
+
+# 18u — start scripts source session-replay-log.sh
+for script in start-aider.sh start-goose.sh start-ashlrcode.sh start-openhands.sh; do
+  if grep -q 'session-replay-log.sh' "$REPO_ROOT/scripts/$script"; then
+    _ok "$script sources session-replay-log.sh"
+  else
+    _fail "$script does not source session-replay-log.sh"
+  fi
+  if grep -q 'replay_session_init' "$REPO_ROOT/scripts/$script"; then
+    _ok "$script calls replay_session_init"
+  else
+    _fail "$script does not call replay_session_init"
+  fi
+  if bash -n "$REPO_ROOT/scripts/$script" 2>/dev/null; then
+    _ok "$script bash syntax OK after replay hook"
+  else
+    _fail "$script bash syntax error after replay hook"
+  fi
+done
+
+# 18v — bin/aw recognises 'replay' subcommand
+if grep -q 'replay' "$REPO_ROOT/bin/aw"; then
+  _ok "bin/aw recognises replay subcommand"
+else
+  _fail "bin/aw does not recognise replay subcommand"
+fi
+
+# 18w — bin/aw help mentions replay
+AW_HELP_RPL="$(
+  env -i HOME="$HOME" NO_COLOR=1 bash -c "'$REPO_ROOT/bin/aw' help" 2>&1
+)"
+if printf '%s' "$AW_HELP_RPL" | grep -q 'replay'; then
+  _ok "aw help mentions replay subcommand"
+else
+  _fail "aw help missing replay (got: $AW_HELP_RPL)"
+fi
+
+# 18x — bin/aw references session-replay.sh
+if grep -q 'session-replay.sh' "$REPO_ROOT/bin/aw"; then
+  _ok "bin/aw references session-replay.sh"
+else
+  _fail "bin/aw does not reference session-replay.sh"
+fi
+
+# 18y — aw doctor --analyze-divergence flag is wired
+if grep -q 'analyze-divergence' "$REPO_ROOT/bin/aw"; then
+  _ok "bin/aw doctor --analyze-divergence flag is wired"
+else
+  _fail "bin/aw doctor --analyze-divergence flag missing"
+fi
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n"
 if [ "$FAIL" -eq 0 ]; then

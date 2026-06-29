@@ -325,6 +325,17 @@ cmd_doctor() {
     exec "$validator" "$@"
   fi
 
+  # --analyze-divergence flag: run the session replay divergence analysis.
+  if [ "${1:-}" = "--analyze-divergence" ]; then
+    local replay_script="$SCRIPTS_DIR/session-replay.sh"
+    if [ ! -x "$replay_script" ]; then
+      bad "session-replay.sh not found or not executable: $replay_script"
+      exit 1
+    fi
+    shift
+    exec "$replay_script" analyze-divergence "$@"
+  fi
+
   title "aw doctor — diagnosing common issues"
   echo
   local issues=0
@@ -455,6 +466,7 @@ ${C_BOLD}COMMANDS${C_RESET}
   ${C_CYAN}update${C_RESET}          update agents + plugin (delegates to scripts/update-all.sh)
   ${C_CYAN}doctor${C_RESET}          diagnose common issues + suggest fixes
   ${C_CYAN}doctor --mcp-audit${C_RESET}  full MCP protocol compliance audit (initialize→tools/list→shutdown)
+  ${C_CYAN}doctor --analyze-divergence${C_RESET}  detect systematic agent-to-agent performance gaps
   ${C_CYAN}log${C_RESET} <subcmd>     view the cross-agent session log (tail/recent/stats/filter/rotate)
   ${C_CYAN}mode${C_RESET} <mode>     switch model loading (coding/trading/both/lean/status)
   ${C_CYAN}layout${C_RESET} <name>   open a multi-pane workspace (workbench/feature/parallel/research)
@@ -463,6 +475,7 @@ ${C_BOLD}COMMANDS${C_RESET}
   ${C_CYAN}summary${C_RESET}         summarize the most recent session
   ${C_CYAN}llm-status${C_RESET}      probe all LLM endpoints and show latency matrix
   ${C_CYAN}monitor${C_RESET} <sub>   agent auto-restart daemon (start|stop|status)
+  ${C_CYAN}replay${C_RESET} <sub>    session replay & divergence detector (list|compare|diff|export|analyze-divergence)
   ${C_CYAN}help${C_RESET}            show this message
 
 ${C_BOLD}EXAMPLES${C_RESET}
@@ -488,11 +501,11 @@ EOF
 
 # ─── Interactive mode detection ───────────────────────────────────────────────
 # Known subcommands that are NOT interactive-mode triggers.
-KNOWN_SUBCOMMANDS="start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|monitor|help"
+KNOWN_SUBCOMMANDS="start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|monitor|replay|help"
 
 is_known_subcommand() {
   case "$1" in
-    start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|resume|summary|auto|llm-status|monitor|help) return 0 ;;
+    start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|resume|summary|auto|llm-status|monitor|replay|help) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -560,6 +573,14 @@ case "$cmd" in
   summary)            exec "$SCRIPTS_DIR/session-summary.sh" "$@" ;;
   llm-status)         cmd_llm_status "$@" ;;
   monitor)            cmd_monitor    "$@" ;;
+  replay)
+    local replay_script="$SCRIPTS_DIR/session-replay.sh"
+    if [ ! -x "$replay_script" ]; then
+      bad "session-replay.sh not found or not executable: $replay_script"
+      exit 1
+    fi
+    exec "$replay_script" "$@"
+    ;;
   help)               cmd_help        ;;
   *)
     bad "unknown command: $cmd"
