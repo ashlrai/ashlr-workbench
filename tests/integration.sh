@@ -397,6 +397,252 @@ else
   _fail "healthcheck.sh does not call validate_mcp_servers"
 fi
 
+# ─── Test 9: config-validate.sh library ──────────────────────────────────────
+printf "\n\033[1mTest 9: config-validate.sh library\033[0m\n"
+
+CONFIG_VALIDATE_SH="$REPO_ROOT/scripts/lib/config-validate.sh"
+
+# 9a — file exists and is executable
+assert_file_executable "config-validate.sh is executable" "$CONFIG_VALIDATE_SH"
+
+# 9b — bash syntax check
+if bash -n "$CONFIG_VALIDATE_SH" 2>/dev/null; then
+  _ok "config-validate.sh passes bash syntax check"
+else
+  _fail "config-validate.sh has bash syntax errors"
+fi
+
+# 9c — double-source guard
+DOUBLE_CV="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    . '$CONFIG_SH'
+    . '$CONFIG_VALIDATE_SH'
+    . '$CONFIG_VALIDATE_SH'
+    echo sourced_twice_ok
+  " 2>&1
+)"
+if printf '%s' "$DOUBLE_CV" | grep -q 'sourced_twice_ok'; then
+  _ok "config-validate.sh double-source guard works"
+else
+  _fail "config-validate.sh double-source produced errors: $DOUBLE_CV"
+fi
+
+# 9d — validate_all_agent_configs is defined after sourcing
+CV_FUNC="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    . '$CONFIG_SH'
+    . '$CONFIG_VALIDATE_SH'
+    if declare -f validate_all_agent_configs >/dev/null 2>&1; then
+      echo defined
+    else
+      echo missing
+    fi
+  " 2>&1
+)"
+assert_eq "validate_all_agent_configs function is defined" "defined" "$CV_FUNC"
+
+# 9e — validate_toml_sections catches a missing section (bad)
+TOML_MISSING_SECTION="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    tmpfile=\"\$(mktemp /tmp/cv-test-XXXXXX.toml)\"
+    printf '[core]\nfoo = 1\n' > \"\$tmpfile\"
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); printf 'ok: %s\n' \"\$*\"; }
+    warn() { WARN=\$((WARN+1)); }
+    bad()  { FAIL=\$((FAIL+1)); printf 'bad: %s\n' \"\$*\"; }
+    . '$CONFIG_VALIDATE_SH'
+    validate_toml_sections \"\$tmpfile\" 'core,llm,sandbox' 'test.toml'
+    rm -f \"\$tmpfile\"
+    echo \"PASS=\$PASS FAIL=\$FAIL\"
+  " 2>&1
+)"
+if printf '%s' "$TOML_MISSING_SECTION" | grep -q 'FAIL=2'; then
+  _ok "validate_toml_sections detects 2 missing sections"
+else
+  _fail "validate_toml_sections section-check unexpected output: $TOML_MISSING_SECTION"
+fi
+
+# 9f — validate_toml_keys catches a missing key within a section (bad)
+TOML_MISSING_KEY="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    tmpfile=\"\$(mktemp /tmp/cv-test-XXXXXX.toml)\"
+    printf '[sandbox]\ntimeout = 120\n' > \"\$tmpfile\"
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); }
+    warn() { WARN=\$((WARN+1)); }
+    bad()  { FAIL=\$((FAIL+1)); printf 'bad: %s\n' \"\$*\"; }
+    . '$CONFIG_VALIDATE_SH'
+    validate_toml_keys \"\$tmpfile\" sandbox \
+      'timeout,runtime_container_image,use_host_network' 'test.toml'
+    rm -f \"\$tmpfile\"
+    echo \"PASS=\$PASS FAIL=\$FAIL\"
+  " 2>&1
+)"
+# Should report failure for the 2 missing keys
+if printf '%s' "$TOML_MISSING_KEY" | grep -q 'FAIL='; then
+  CV_FAILS="$(printf '%s' "$TOML_MISSING_KEY" | grep 'FAIL=' | grep -o 'FAIL=[0-9]*' | cut -d= -f2)"
+  if [ "${CV_FAILS:-0}" -ge 1 ]; then
+    _ok "validate_toml_keys detects missing keys in [sandbox]"
+  else
+    _fail "validate_toml_keys did not catch missing keys (output: $TOML_MISSING_KEY)"
+  fi
+else
+  _fail "validate_toml_keys produced unexpected output: $TOML_MISSING_KEY"
+fi
+
+# 9g — validate_yaml_keys catches a missing key
+YAML_MISSING_KEY="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    tmpfile=\"\$(mktemp /tmp/cv-test-XXXXXX.yaml)\"
+    printf 'model: gpt-4\nstream: true\n' > \"\$tmpfile\"
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); }
+    warn() { WARN=\$((WARN+1)); }
+    bad()  { FAIL=\$((FAIL+1)); printf 'bad: %s\n' \"\$*\"; }
+    . '$CONFIG_VALIDATE_SH'
+    validate_yaml_keys \"\$tmpfile\" 'model,stream,pretty,openai-api-base' 'test.yaml'
+    rm -f \"\$tmpfile\"
+    echo \"PASS=\$PASS FAIL=\$FAIL\"
+  " 2>&1
+)"
+if printf '%s' "$YAML_MISSING_KEY" | grep -q 'FAIL='; then
+  CV_FAILS="$(printf '%s' "$YAML_MISSING_KEY" | grep 'FAIL=' | grep -o 'FAIL=[0-9]*' | cut -d= -f2)"
+  if [ "${CV_FAILS:-0}" -ge 1 ]; then
+    _ok "validate_yaml_keys detects missing YAML keys"
+  else
+    _fail "validate_yaml_keys did not catch missing keys (output: $YAML_MISSING_KEY)"
+  fi
+else
+  _fail "validate_yaml_keys produced unexpected output: $YAML_MISSING_KEY"
+fi
+
+# 9h — validate_json_keys catches missing keys
+JSON_MISSING_KEY="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    tmpfile=\"\$(mktemp /tmp/cv-test-XXXXXX.json)\"
+    printf '{\"providers\":{},\"mcpServers\":{}}' > \"\$tmpfile\"
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); }
+    warn() { WARN=\$((WARN+1)); }
+    bad()  { FAIL=\$((FAIL+1)); printf 'bad: %s\n' \"\$*\"; }
+    . '$CONFIG_VALIDATE_SH'
+    validate_json_keys \"\$tmpfile\" 'providers,mcpServers,hooks,approveMode' 'test.json'
+    rm -f \"\$tmpfile\"
+    echo \"PASS=\$PASS FAIL=\$FAIL\"
+  " 2>&1
+)"
+if printf '%s' "$JSON_MISSING_KEY" | grep -q 'FAIL='; then
+  CV_FAILS="$(printf '%s' "$JSON_MISSING_KEY" | grep 'FAIL=' | grep -o 'FAIL=[0-9]*' | cut -d= -f2)"
+  if [ "${CV_FAILS:-0}" -ge 1 ]; then
+    _ok "validate_json_keys detects missing JSON keys"
+  else
+    _fail "validate_json_keys did not catch missing keys (output: $JSON_MISSING_KEY)"
+  fi
+else
+  _fail "validate_json_keys produced unexpected output: $JSON_MISSING_KEY"
+fi
+
+# 9i — validate_json_schema validates mcp.json structure against schema
+JSON_SCHEMA_OK="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); printf 'ok: %s\n' \"\$*\"; }
+    warn() { WARN=\$((WARN+1)); }
+    bad()  { FAIL=\$((FAIL+1)); printf 'bad: %s\n' \"\$*\"; }
+    . '$CONFIG_VALIDATE_SH'
+    validate_json_schema \
+      '$REPO_ROOT/agents/openhands/mcp.json' \
+      '$REPO_ROOT/agents/openhands/schema.json' \
+      'openhands/mcp.json'
+    echo \"PASS=\$PASS FAIL=\$FAIL\"
+  " 2>&1
+)"
+if printf '%s' "$JSON_SCHEMA_OK" | grep -q 'FAIL=0'; then
+  _ok "validate_json_schema: openhands/mcp.json passes schema baseline"
+else
+  _fail "validate_json_schema: openhands/mcp.json failed schema check (output: $JSON_SCHEMA_OK)"
+fi
+
+# 9j — validate_json_schema catches a schema violation (missing required server)
+JSON_SCHEMA_DRIFT="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    tmpfile=\"\$(mktemp /tmp/cv-test-XXXXXX.json)\"
+    printf '{\"stdio_servers\":[{\"name\":\"ashlr-efficiency\",\"command\":\"bash\",\"args\":[]}],\"sse_servers\":[],\"shttp_servers\":[]}' > \"\$tmpfile\"
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); }
+    warn() { WARN=\$((WARN+1)); }
+    bad()  { FAIL=\$((FAIL+1)); printf 'bad: %s\n' \"\$*\"; }
+    . '$CONFIG_VALIDATE_SH'
+    validate_json_schema \"\$tmpfile\" \
+      '$REPO_ROOT/agents/openhands/schema.json' \
+      'test-mcp.json'
+    rm -f \"\$tmpfile\"
+    echo \"PASS=\$PASS FAIL=\$FAIL\"
+  " 2>&1
+)"
+if printf '%s' "$JSON_SCHEMA_DRIFT" | grep -q 'FAIL='; then
+  CV_FAILS="$(printf '%s' "$JSON_SCHEMA_DRIFT" | grep 'FAIL=' | grep -o 'FAIL=[0-9]*' | cut -d= -f2)"
+  if [ "${CV_FAILS:-0}" -ge 1 ]; then
+    _ok "validate_json_schema detects missing required stdio_servers (schema drift)"
+  else
+    _fail "validate_json_schema did not catch schema drift (output: $JSON_SCHEMA_DRIFT)"
+  fi
+else
+  _fail "validate_json_schema schema-drift check unexpected output: $JSON_SCHEMA_DRIFT"
+fi
+
+# 9k — validate_all_agent_configs runs without crashing on actual agent configs
+ALL_CONFIGS="$(
+  env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash -c "
+    PASS=0; WARN=0; FAIL=0
+    ok()   { PASS=\$((PASS+1)); }
+    warn() { WARN=\$((WARN+1)); }
+    bad()  { FAIL=\$((FAIL+1)); printf 'bad: %s\n' \"\$*\"; }
+    . '$CONFIG_VALIDATE_SH'
+    validate_all_agent_configs
+    echo \"PASS=\$PASS FAIL=\$FAIL exit_ok\"
+  " 2>&1
+)"
+if printf '%s' "$ALL_CONFIGS" | grep -q 'exit_ok'; then
+  if printf '%s' "$ALL_CONFIGS" | grep -q 'FAIL=0'; then
+    _ok "validate_all_agent_configs: all real agent configs pass schema checks"
+  else
+    CV_FAILS="$(printf '%s' "$ALL_CONFIGS" | grep 'FAIL=' | grep -o 'FAIL=[0-9]*' | cut -d= -f2)"
+    _fail "validate_all_agent_configs: ${CV_FAILS:-?} schema check(s) failed (output: $ALL_CONFIGS)"
+  fi
+else
+  _fail "validate_all_agent_configs crashed: $ALL_CONFIGS"
+fi
+
+# 9l — healthcheck.sh sources config-validate.sh
+if grep -q 'config-validate.sh' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh sources config-validate.sh"
+else
+  _fail "healthcheck.sh does not source config-validate.sh"
+fi
+
+# 9m — healthcheck.sh calls validate_all_agent_configs
+if grep -q 'validate_all_agent_configs' "$REPO_ROOT/scripts/healthcheck.sh"; then
+  _ok "healthcheck.sh calls validate_all_agent_configs"
+else
+  _fail "healthcheck.sh does not call validate_all_agent_configs"
+fi
+
+# 9n — all agents have a schema.json baseline
+for agent in openhands aider goose ashlrcode; do
+  schema_path="$REPO_ROOT/agents/$agent/schema.json"
+  if [ -f "$schema_path" ]; then
+    # Verify it's valid JSON
+    if python3 -c "import json; json.load(open('$schema_path'))" 2>/dev/null; then
+      _ok "agents/$agent/schema.json exists and is valid JSON"
+    else
+      _fail "agents/$agent/schema.json exists but is not valid JSON"
+    fi
+  else
+    _fail "agents/$agent/schema.json missing (schema baseline required)"
+  fi
+done
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n"
 if [ "$FAIL" -eq 0 ]; then

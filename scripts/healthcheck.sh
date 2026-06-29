@@ -31,6 +31,10 @@ OPENHANDS_CONTAINER="ashlr-openhands"
 # shellcheck source=scripts/lib/mcp-probe.sh
 . "$SCRIPT_DIR/lib/mcp-probe.sh"
 
+# Source the config validation library (provides validate_all_agent_configs).
+# shellcheck source=scripts/lib/config-validate.sh
+. "$SCRIPT_DIR/lib/config-validate.sh"
+
 # ─── Colors ───────────────────────────────────────────────────────────────────
 if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then
   C_RESET=""; C_RED=""; C_GREEN=""; C_YELLOW=""; C_BOLD=""; C_DIM=""
@@ -216,68 +220,14 @@ else
   warn "workbench is not a git repo"
 fi
 
-# ─── 10. Agent configs valid ──────────────────────────────────────────────────
-section "Agent configs"
-
-validate_json() {
-  local f="$1"; local label="$2"
-  if [ ! -f "$f" ]; then bad "$label missing: $f"; return; fi
-  if have python3 && python3 -c "import json,sys; json.load(open('$f'))" 2>/dev/null; then
-    ok "$label JSON valid"
-  elif have node && node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))" 2>/dev/null; then
-    ok "$label JSON valid"
-  else
-    warn "$label: no JSON validator available (install python3 or node)"
-  fi
-}
-
-validate_yaml() {
-  local f="$1"; local label="$2"
-  if [ ! -f "$f" ]; then bad "$label missing: $f"; return; fi
-  if have python3 && python3 -c "
-import sys
-try:
-    import yaml
-    yaml.safe_load(open('$f'))
-except ImportError:
-    # PyYAML may be unavailable on system python; fall back to a syntax sniff.
-    txt=open('$f').read()
-    # Minimal sanity: no tabs, balanced quotes
-    if '\t' in txt:
-        sys.exit('contains tabs')
-" 2>/dev/null; then
-    ok "$label YAML valid"
-  else
-    warn "$label: YAML validation skipped (install pyyaml)"
-  fi
-}
-
-validate_toml() {
-  local f="$1"; local label="$2"
-  if [ ! -f "$f" ]; then bad "$label missing: $f"; return; fi
-  if have python3 && python3 -c "
-import sys
-try:
-    import tomllib  # py311+
-    tomllib.load(open('$f','rb'))
-except ImportError:
-    try:
-        import tomli
-        tomli.load(open('$f','rb'))
-    except ImportError:
-        sys.exit('no toml lib')
-" 2>/dev/null; then
-    ok "$label TOML valid"
-  else
-    warn "$label: TOML validation skipped (no tomllib/tomli)"
-  fi
-}
-
-validate_json "$WORKBENCH/agents/openhands/mcp.json"      "openhands/mcp.json"
-validate_toml "$WORKBENCH/agents/openhands/config.toml"   "openhands/config.toml"
-validate_yaml "$WORKBENCH/agents/aider/aider.conf.yml"    "aider/aider.conf.yml"
-validate_yaml "$WORKBENCH/agents/goose/config.yaml"       "goose/config.yaml"
-validate_json "$WORKBENCH/agents/ashlrcode/settings.json" "ashlrcode/settings.json"
+# ─── 10. Agent configs valid (schema-aware) ───────────────────────────────────
+# config-validate.sh provides typed assertion functions and validate_all_agent_configs.
+# It checks that every required section/key is present in each agent config and
+# compares against the schema baselines in agents/*/schema.json.  When an agent
+# is upgraded and renames a key, this catches it immediately with a precise error:
+#   'config.toml: missing [sandbox].runtime_container_image — expected from OpenHands 1.6+ schema'
+section "Agent configs (schema validation)"
+validate_all_agent_configs
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n%sResult:%s %s%d passed%s, %s%d warnings%s, %s%d failed%s\n" \

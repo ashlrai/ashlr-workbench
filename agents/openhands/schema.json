@@ -1,0 +1,59 @@
+{
+  "_comment": "Schema baseline for OpenHands 1.6 — config.toml + mcp.json contract. Used by scripts/lib/config-validate.sh to catch schema drift on upgrade.",
+  "_version": "1.6.0",
+  "_upgrade_docs": "https://docs.openhands.dev/openhands/usage/run-openhands/local-setup",
+  "config_toml": {
+    "required_sections": ["core", "llm", "sandbox", "agent", "security"],
+    "required_keys": {
+      "core": [
+        "workspace_base",
+        "file_store",
+        "max_iterations",
+        "run_as_openhands"
+      ],
+      "llm": [
+        "model",
+        "base_url",
+        "api_key",
+        "max_input_tokens",
+        "max_output_tokens",
+        "temperature"
+      ],
+      "sandbox": [
+        "runtime_container_image",
+        "timeout",
+        "use_host_network"
+      ],
+      "agent": [
+        "name",
+        "enable_mcp",
+        "mcp_config_path"
+      ],
+      "security": [
+        "confirmation_mode",
+        "security_analyzer"
+      ]
+    },
+    "known_values": {
+      "agent.name": ["CodeActAgent"],
+      "core.file_store": ["local", "s3"],
+      "sandbox.use_host_network": ["true", "false"]
+    }
+  },
+  "mcp_json": {
+    "required_keys": ["stdio_servers", "sse_servers", "shttp_servers"],
+    "stdio_server_required_keys": ["name", "command", "args"],
+    "required_server_names": [
+      "ashlr-efficiency",
+      "ashlr-sql",
+      "ashlr-bash",
+      "ashlr-tree",
+      "ashlr-http",
+      "ashlr-diff",
+      "ashlr-logs",
+      "ashlr-genome",
+      "ashlr-orient",
+      "ashlr-github"
+    ]
+  }
+}

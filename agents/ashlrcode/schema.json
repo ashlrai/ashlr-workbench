@@ -1,0 +1,34 @@
+{
+  "_comment": "Schema baseline for ashlrcode — settings.json contract. Used by scripts/lib/config-validate.sh to catch schema drift on upgrade.",
+  "_version": "0.x",
+  "_upgrade_docs": "https://docs.ashlr.dev/settings",
+  "settings_json": {
+    "required_keys": [
+      "providers",
+      "mcpServers",
+      "approveMode",
+      "autoAcceptEdits",
+      "dangerouslySkipPermissions",
+      "hooks"
+    ],
+    "required_mcp_servers": [
+      "ashlr-efficiency",
+      "ashlr-sql",
+      "ashlr-bash",
+      "ashlr-tree",
+      "ashlr-http",
+      "ashlr-diff",
+      "ashlr-logs",
+      "ashlr-genome",
+      "ashlr-orient",
+      "ashlr-github"
+    ],
+    "mcp_server_required_keys": ["command", "args"],
+    "hook_required_keys": ["preToolUse", "postToolUse"],
+    "known_values": {
+      "approveMode": ["default", "auto", "manual"],
+      "autoAcceptEdits": ["true", "false"],
+      "dangerouslySkipPermissions": ["true", "false"]
+    }
+  }
+}

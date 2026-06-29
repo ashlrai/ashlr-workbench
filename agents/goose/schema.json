@@ -1,0 +1,36 @@
+{
+  "_comment": "Schema baseline for Goose — config.yaml contract. Used by scripts/lib/config-validate.sh to catch schema drift on upgrade.",
+  "_version": "0.x",
+  "_upgrade_docs": "https://block.github.io/goose/docs/configuration",
+  "config_yaml": {
+    "required_keys": [
+      "GOOSE_PROVIDER",
+      "GOOSE_MODEL",
+      "OPENAI_HOST",
+      "OPENAI_BASE_PATH",
+      "OPENAI_API_KEY",
+      "GOOSE_MODE",
+      "GOOSE_TEMPERATURE",
+      "GOOSE_MAX_TOKENS",
+      "extensions"
+    ],
+    "required_extension_names": [
+      "ashlr-efficiency",
+      "ashlr-sql",
+      "ashlr-bash",
+      "ashlr-tree",
+      "ashlr-http",
+      "ashlr-diff",
+      "ashlr-logs",
+      "ashlr-genome",
+      "ashlr-orient",
+      "ashlr-github",
+      "developer"
+    ],
+    "extension_required_keys": ["enabled", "type", "name"],
+    "known_values": {
+      "GOOSE_PROVIDER": ["openai", "anthropic", "ollama"],
+      "GOOSE_MODE": ["smart_approve", "chat", "auto"]
+    }
+  }
+}

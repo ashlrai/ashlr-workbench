@@ -1,0 +1,38 @@
+{
+  "_comment": "Schema baseline for Aider — aider.conf.yml contract. Used by scripts/lib/config-validate.sh to catch schema drift on upgrade.",
+  "_version": "0.x",
+  "_upgrade_docs": "https://aider.chat/docs/config/aider_conf.html",
+  "aider_conf_yml": {
+    "required_keys": [
+      "model",
+      "openai-api-base",
+      "openai-api-key",
+      "auto-commits",
+      "dirty-commits",
+      "map-tokens",
+      "stream",
+      "pretty"
+    ],
+    "boolean_keys": [
+      "auto-commits",
+      "dirty-commits",
+      "attribute-author",
+      "attribute-committer",
+      "gitignore",
+      "pretty",
+      "stream",
+      "show-diffs",
+      "watch-files",
+      "auto-lint",
+      "auto-test",
+      "analytics-disable",
+      "check-update"
+    ],
+    "known_values": {
+      "auto-commits": ["true", "false"],
+      "dirty-commits": ["true", "false"],
+      "stream": ["true", "false"],
+      "pretty": ["true", "false"]
+    }
+  }
+}
