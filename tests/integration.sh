@@ -1730,6 +1730,191 @@ else
   _fail "agent-monitor.sh stop exited $MON_STOP_RC (output: $MON_STOP_OUT)"
 fi
 
+# ─── Test 14: config-audit.sh + agents/config-schema.json ────────────────────
+printf "\n\033[1mTest 14: config-audit.sh + config-schema.json\033[0m\n"
+
+AUDIT_SH="$REPO_ROOT/scripts/config-audit.sh"
+AUDIT_SCHEMA="$REPO_ROOT/agents/config-schema.json"
+
+# 14a — config-audit.sh exists and is executable
+assert_file_executable "config-audit.sh is executable" "$AUDIT_SH"
+
+# 14b — config-audit.sh passes bash syntax check
+if bash -n "$AUDIT_SH" 2>/dev/null; then
+  _ok "config-audit.sh passes bash syntax check"
+else
+  _fail "config-audit.sh has bash syntax errors"
+fi
+
+# 14c — agents/config-schema.json exists and is valid JSON
+if [ -f "$AUDIT_SCHEMA" ]; then
+  if python3 -c "import json; json.load(open('$AUDIT_SCHEMA'))" 2>/dev/null; then
+    _ok "agents/config-schema.json exists and is valid JSON"
+  else
+    _fail "agents/config-schema.json exists but is not valid JSON"
+  fi
+else
+  _fail "agents/config-schema.json missing"
+fi
+
+# 14d — schema contains required top-level sections
+SCHEMA_SECTIONS="$(
+  python3 -c "
+import json, sys
+schema = json.load(open('$AUDIT_SCHEMA'))
+required = ['known_models', 'known_llm_urls', 'known_mcp_servers', 'deprecated_keys', 'agents']
+missing = [k for k in required if k not in schema]
+print('missing=' + ','.join(missing) if missing else 'ok')
+" 2>/dev/null
+)"
+if [ "$SCHEMA_SECTIONS" = "ok" ]; then
+  _ok "agents/config-schema.json has all required top-level sections"
+else
+  _fail "agents/config-schema.json missing sections: ${SCHEMA_SECTIONS#missing=}"
+fi
+
+# 14e — config-audit.sh --help exits 0
+AUDIT_HELP_RC=0
+env -i HOME="$HOME" WORKBENCH="$REPO_ROOT" bash "$AUDIT_SH" --help >/dev/null 2>&1 || AUDIT_HELP_RC=$?
+if [ "$AUDIT_HELP_RC" -eq 0 ]; then
+  _ok "config-audit.sh --help exits 0"
+else
+  _fail "config-audit.sh --help exited $AUDIT_HELP_RC"
+fi
+
+# 14f — config-audit.sh runs cleanly on real configs (no crashes)
+AUDIT_CSV_TMP="$(mktemp /tmp/audit-test-XXXXXX.csv)"
+AUDIT_OUT="$(
+  env -i HOME="$HOME" PATH="$PATH" NO_COLOR=1 WORKBENCH="$REPO_ROOT" \
+    bash "$AUDIT_SH" --csv "$AUDIT_CSV_TMP" 2>&1
+)"
+AUDIT_RC=$?
+if [ "$AUDIT_RC" -eq 0 ] || [ "$AUDIT_RC" -eq 1 ]; then
+  _ok "config-audit.sh exits cleanly (0=clean, 1=issues) on real configs (rc=$AUDIT_RC)"
+else
+  _fail "config-audit.sh crashed with unexpected exit code $AUDIT_RC"
+fi
+
+# 14g — config-audit.sh produces an Audit Summary line
+if printf '%s' "$AUDIT_OUT" | grep -q 'Audit Summary:'; then
+  _ok "config-audit.sh output contains 'Audit Summary:' line"
+else
+  _fail "config-audit.sh output missing 'Audit Summary:' line (got: $AUDIT_OUT)"
+fi
+
+# 14h — CSV file is written and contains expected header
+if [ -f "$AUDIT_CSV_TMP" ]; then
+  if grep -q 'timestamp,agent,pass,warn,fail,compliance_pct,status' "$AUDIT_CSV_TMP"; then
+    _ok "config-audit.sh writes CSV with correct header"
+  else
+    _fail "config-audit.sh CSV missing expected header"
+  fi
+else
+  _fail "config-audit.sh did not write CSV to $AUDIT_CSV_TMP"
+fi
+rm -f "$AUDIT_CSV_TMP"
+
+# 14i — CSV contains an entry for each of the 4 agents
+AUDIT_CSV_TMP2="$(mktemp /tmp/audit-test2-XXXXXX.csv)"
+env -i HOME="$HOME" PATH="$PATH" NO_COLOR=1 WORKBENCH="$REPO_ROOT" \
+  bash "$AUDIT_SH" --csv "$AUDIT_CSV_TMP2" >/dev/null 2>&1 || true
+for ag in openhands goose aider ashlrcode; do
+  if grep -q ",$ag," "$AUDIT_CSV_TMP2" 2>/dev/null || grep -q "^[^,]*,$ag," "$AUDIT_CSV_TMP2" 2>/dev/null; then
+    _ok "config-audit.sh CSV contains entry for agent: $ag"
+  else
+    _fail "config-audit.sh CSV missing entry for agent: $ag"
+  fi
+done
+rm -f "$AUDIT_CSV_TMP2"
+
+# 14j — config-audit.sh output covers all 5 audit sections
+for section in \
+  "1. Model Name" \
+  "2. LLM Endpoint" \
+  "3. MCP Server" \
+  "4. Deprecated Key" \
+  "5. Env Var"; do
+  if printf '%s' "$AUDIT_OUT" | grep -qi "$section"; then
+    _ok "config-audit.sh covers audit section: $section"
+  else
+    _fail "config-audit.sh missing audit section: $section (got: $(printf '%s' "$AUDIT_OUT" | head -5))"
+  fi
+done
+
+# 14k — schema known_models includes the workbench default model
+if python3 -c "
+import json, sys
+schema = json.load(open('$AUDIT_SCHEMA'))
+models = schema.get('known_models', [])
+# Primary local model must be present (with and without openai/ prefix)
+assert any('qwen3-coder-30b' in m for m in models), 'qwen3-coder-30b not in known_models'
+print('ok')
+" 2>/dev/null | grep -q ok; then
+  _ok "agents/config-schema.json known_models includes qwen3-coder-30b"
+else
+  _fail "agents/config-schema.json known_models missing qwen3-coder-30b"
+fi
+
+# 14l — schema deprecated_keys covers all 4 agent config formats
+if python3 -c "
+import json, sys
+schema = json.load(open('$AUDIT_SCHEMA'))
+depr = schema.get('deprecated_keys', {})
+required = ['openhands_config_toml', 'goose_config_yaml', 'aider_conf_yml', 'ashlrcode_settings_json']
+missing = [k for k in required if k not in depr]
+print('missing=' + ','.join(missing) if missing else 'ok')
+" 2>/dev/null | grep -q ok; then
+  _ok "agents/config-schema.json deprecated_keys covers all 4 agent config formats"
+else
+  _fail "agents/config-schema.json deprecated_keys missing some agent config formats"
+fi
+
+# 14m — config-audit.sh --fix flag is accepted (syntax / flag parsing)
+AUDIT_FIX_SYNTAX_RC=0
+bash -c "bash '$AUDIT_SH' --help | grep -q fix" 2>/dev/null || AUDIT_FIX_SYNTAX_RC=$?
+if printf '%s' "$(env -i HOME="$HOME" bash "$AUDIT_SH" --help 2>&1)" | grep -q '\-\-fix'; then
+  _ok "config-audit.sh --help documents --fix flag"
+else
+  _fail "config-audit.sh --help missing --fix flag documentation"
+fi
+
+# 14n — pre-commit hook exists and is executable
+PRECOMMIT_HOOK="$REPO_ROOT/.git/hooks/pre-commit"
+if [ -x "$PRECOMMIT_HOOK" ]; then
+  _ok ".git/hooks/pre-commit exists and is executable"
+else
+  _fail ".git/hooks/pre-commit missing or not executable"
+fi
+
+# 14o — pre-commit hook passes bash syntax check
+if bash -n "$PRECOMMIT_HOOK" 2>/dev/null; then
+  _ok ".git/hooks/pre-commit passes bash syntax check"
+else
+  _fail ".git/hooks/pre-commit has bash syntax errors"
+fi
+
+# 14p — pre-commit hook references config-audit.sh
+if grep -q 'config-audit.sh' "$PRECOMMIT_HOOK"; then
+  _ok ".git/hooks/pre-commit references config-audit.sh"
+else
+  _fail ".git/hooks/pre-commit does not reference config-audit.sh"
+fi
+
+# 14q — pre-commit hook exits 0 when no config files are staged (non-config commit)
+PRECOMMIT_OUT="$(
+  env -i HOME="$HOME" PATH="$PATH" \
+    GIT_DIR="$REPO_ROOT/.git" \
+    GIT_WORK_TREE="$REPO_ROOT" \
+    SKIP_CONFIG_AUDIT=1 \
+    bash "$PRECOMMIT_HOOK" 2>&1
+)"
+PRECOMMIT_RC=$?
+if [ "$PRECOMMIT_RC" -eq 0 ]; then
+  _ok ".git/hooks/pre-commit exits 0 when SKIP_CONFIG_AUDIT=1"
+else
+  _fail ".git/hooks/pre-commit exited $PRECOMMIT_RC with SKIP_CONFIG_AUDIT=1"
+fi
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n"
 if [ "$FAIL" -eq 0 ]; then

@@ -1,0 +1,153 @@
+{
+  "_comment": "Canonical cross-agent config schema for ashlr-workbench. Used by scripts/config-audit.sh to validate all 4 agent config files for model name consistency, LLM URL correctness, MCP server refs, deprecated keys, and env var coverage.",
+  "_version": "1.0.0",
+  "_updated": "2026-06-29",
+
+  "known_models": [
+    "openai/qwen3-coder-30b",
+    "openai/qwen/qwen3-coder-30b",
+    "qwen/qwen3-coder-30b",
+    "qwen3-coder-30b",
+    "openai/qwen3-235b-a22b-thinking-2507",
+    "gemma2:27b",
+    "grok-4.3",
+    "grok-3",
+    "grok-3-mini",
+    "claude-opus-4-5",
+    "claude-sonnet-4-5",
+    "claude-haiku-3-5",
+    "gpt-4o",
+    "gpt-4o-mini"
+  ],
+
+  "known_llm_urls": [
+    "http://localhost:1234/v1",
+    "http://localhost:1234",
+    "http://host.docker.internal:1234/v1",
+    "http://host.docker.internal:1234",
+    "http://localhost:11434",
+    "http://localhost:11434/v1",
+    "https://api.x.ai/v1",
+    "https://api.openai.com/v1",
+    "https://api.anthropic.com"
+  ],
+
+  "known_mcp_servers": [
+    "ashlr-efficiency",
+    "ashlr-sql",
+    "ashlr-bash",
+    "ashlr-tree",
+    "ashlr-http",
+    "ashlr-diff",
+    "ashlr-logs",
+    "ashlr-genome",
+    "ashlr-orient",
+    "ashlr-github"
+  ],
+
+  "deprecated_keys": {
+    "openhands_config_toml": [
+      {
+        "key": "llm.api_base",
+        "replacement": "llm.base_url",
+        "reason": "Renamed in OpenHands 0.9+ — use base_url"
+      },
+      {
+        "key": "sandbox.container_image",
+        "replacement": "sandbox.runtime_container_image",
+        "reason": "Renamed in OpenHands 1.0+ — use runtime_container_image"
+      },
+      {
+        "key": "core.max_steps",
+        "replacement": "core.max_iterations",
+        "reason": "Renamed in OpenHands 1.x — use max_iterations"
+      }
+    ],
+    "goose_config_yaml": [
+      {
+        "key": "GOOSE_LLM_PROVIDER",
+        "replacement": "GOOSE_PROVIDER",
+        "reason": "Renamed in Goose 1.x — use GOOSE_PROVIDER"
+      },
+      {
+        "key": "GOOSE_LLM_MODEL",
+        "replacement": "GOOSE_MODEL",
+        "reason": "Renamed in Goose 1.x — use GOOSE_MODEL"
+      },
+      {
+        "key": "OPENAI_BASE_URL",
+        "replacement": "OPENAI_HOST",
+        "reason": "Renamed for Goose — use OPENAI_HOST (without /v1 suffix)"
+      }
+    ],
+    "aider_conf_yml": [
+      {
+        "key": "api-base",
+        "replacement": "openai-api-base",
+        "reason": "Renamed in Aider 0.28+ — use openai-api-base"
+      },
+      {
+        "key": "api-key",
+        "replacement": "openai-api-key",
+        "reason": "Renamed in Aider 0.28+ — use openai-api-key"
+      }
+    ],
+    "ashlrcode_settings_json": [
+      {
+        "key": "base_url",
+        "replacement": "baseURL",
+        "reason": "ashlrcode uses camelCase baseURL — base_url is ignored"
+      },
+      {
+        "key": "api_key",
+        "replacement": "apiKeyEnvVar",
+        "reason": "Inline api_key is discouraged — use apiKeyEnvVar pointing to an env var"
+      }
+    ]
+  },
+
+  "env_var_refs": {
+    "openhands_config_toml": [],
+    "goose_config_yaml": [
+      "ASHLR_PLUGIN_ROOT",
+      "OPENAI_API_KEY"
+    ],
+    "aider_conf_yml": [],
+    "ashlrcode_settings_json": [
+      "XAI_API_KEY",
+      "SUPABASE_ACCESS_TOKEN",
+      "SUPABASE_PROJECT_REF"
+    ]
+  },
+
+  "agents": {
+    "openhands": {
+      "config_file": "agents/openhands/config.toml",
+      "format": "toml",
+      "model_keys": ["llm.model"],
+      "url_keys": ["llm.base_url"],
+      "deprecated_check": "openhands_config_toml"
+    },
+    "goose": {
+      "config_file": "agents/goose/config.yaml",
+      "format": "yaml",
+      "model_keys": ["GOOSE_MODEL"],
+      "url_keys": ["OPENAI_HOST"],
+      "deprecated_check": "goose_config_yaml"
+    },
+    "aider": {
+      "config_file": "agents/aider/aider.conf.yml",
+      "format": "yaml",
+      "model_keys": ["model"],
+      "url_keys": ["openai-api-base"],
+      "deprecated_check": "aider_conf_yml"
+    },
+    "ashlrcode": {
+      "config_file": "agents/ashlrcode/settings.json",
+      "format": "json",
+      "model_keys": ["providers.primary.model"],
+      "url_keys": ["providers.primary.baseURL"],
+      "deprecated_check": "ashlrcode_settings_json"
+    }
+  }
+}

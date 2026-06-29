@@ -32,7 +32,7 @@ disable_color = false
 [llm]
 # LM Studio serves an OpenAI-compatible endpoint. LiteLLM requires the
 # `openai/` prefix so it routes as a generic OpenAI call.
-model = "openai/qwen/qwen3-coder-30b"
+model = "openai/qwen3-coder-30b"
 base_url = "http://host.docker.internal:1234/v1"
 # LM Studio ignores the key value — any non-empty string works.
 api_key = "local-llm"
