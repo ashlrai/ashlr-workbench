@@ -23,6 +23,9 @@
 
 set -uo pipefail
 
+# ─── Agent lifecycle (source early so traps are installed before any exec) ────
+# Resolved after WORKBENCH is set below; sourced after path resolution block.
+
 # ─── Resolve paths ────────────────────────────────────────────────────────────
 # Resolve symlinks so the script works whether invoked directly or via the
 # /usr/local/bin/aw symlink.
@@ -38,6 +41,13 @@ BIN_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 WORKBENCH="$(cd "$BIN_DIR/.." && pwd)"
 SCRIPTS_DIR="$WORKBENCH/scripts"
 AGENTS_DIR="$WORKBENCH/agents"
+
+# ─── Source agent lifecycle manager ──────────────────────────────────────────
+# shellcheck source=scripts/lib/agent-lifecycle.sh
+if [ -f "$SCRIPTS_DIR/lib/agent-lifecycle.sh" ]; then
+  . "$SCRIPTS_DIR/lib/agent-lifecycle.sh"
+  agent_lifecycle_install_traps
+fi
 
 ASHLR_PLUGIN_DIR="${ASHLR_PLUGIN_DIR:-$HOME/Desktop/ashlr-plugin}"
 LM_STUDIO_URL="${LM_STUDIO_URL:-http://localhost:1234/v1}"
@@ -338,6 +348,125 @@ cmd_mcp_heal() {
   mcp_lc_heal "$agent"
 }
 
+# ─── tools ────────────────────────────────────────────────────────────────────
+cmd_tools() {
+  local agent=""
+  local refresh=0
+  local suggest_task=""
+  local inject_mode=""
+
+  # Parse flags
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --refresh)       refresh=1 ;;
+      --suggest)       shift; suggest_task="${1:-}" ;;
+      --inject-goose)  inject_mode="goose" ;;
+      --inject-aider)  inject_mode="aider" ;;
+      --inject-ashlrcode) inject_mode="ashlrcode" ;;
+      --help|-h)
+        cat <<'TOOLS_HELP'
+aw tools [agent] [flags]
+
+Show the live MCP tool inventory for all agents or a specific agent.
+Probes all 10 ashlr-plugin servers to extract actual tool signatures,
+permissions, and latencies.  Falls back to the static registry when the
+plugin is not installed or bun is not available.
+
+ARGUMENTS
+  agent        Filter output to a specific agent:
+               aider | goose | ashlrcode | openhands
+
+FLAGS
+  --refresh             Bypass the 5-minute probe cache and re-probe all servers
+  --suggest "task"      Print tool-suggestion prompt for the given task keyword
+                        (e.g. --suggest "search", --suggest "debug sql query")
+  --inject-goose        Emit GOOSE_SYSTEM_HINT content and exit
+  --inject-aider        Emit aider --system-prompt content and exit
+  --inject-ashlrcode    Emit ashlrcode/Claude Code CLAUDE.md content and exit
+  -h, --help            Show this help
+
+EXAMPLES
+  aw tools                          # full inventory, all agents
+  aw tools goose                    # tools available to Goose
+  aw tools --refresh                # force re-probe (bypass cache)
+  aw tools ashlrcode --suggest "debug sql query"
+  aw tools --inject-goose goose     # emit GOOSE_SYSTEM_HINT content
+  export GOOSE_SYSTEM_HINT="$(aw tools --inject-goose goose)"
+
+COST / LATENCY FOOTNOTES
+  live    = probed via JSON-RPC tools/list  (most accurate, shows real latency)
+  static  = from static registry  (bun not available or server probe timed out)
+  unavail = ashlr-plugin not installed
+TOOLS_HELP
+        return 0
+        ;;
+      -*)
+        bad "unknown flag: $1"
+        echo "Usage: aw tools [agent] [--refresh] [--suggest \"task\"] [--inject-goose|--inject-aider|--inject-ashlrcode]"
+        return 2
+        ;;
+      *)
+        # Positional: agent name
+        if [ -z "$agent" ]; then
+          agent="$1"
+        fi
+        ;;
+    esac
+    shift || true
+  done
+
+  # Validate agent if provided
+  if [ -n "$agent" ]; then
+    case "$agent" in
+      aider|goose|ashlrcode|openhands) : ;;
+      *)
+        bad "unknown agent: $agent"
+        echo "Valid agents: aider, goose, ashlrcode, openhands"
+        return 2
+        ;;
+    esac
+  fi
+
+  local inspector_lib="$SCRIPTS_DIR/lib/mcp-tool-inspector.sh"
+  if [ ! -f "$inspector_lib" ]; then
+    bad "mcp-tool-inspector.sh not found at $inspector_lib"
+    return 1
+  fi
+
+  # Source the inspector library
+  # shellcheck source=scripts/lib/mcp-tool-inspector.sh
+  . "$inspector_lib"
+
+  # Build the matrix (with optional cache bypass)
+  if [ "$refresh" -eq 1 ]; then
+    mcp_inspector_build_matrix force
+  else
+    mcp_inspector_build_matrix
+  fi
+
+  # Inject mode: emit hint text for a specific startup tool
+  if [ -n "$inject_mode" ]; then
+    case "$inject_mode" in
+      goose)      mcp_inspector_inject_goose_session_hint     "${agent:-goose}"      ;;
+      aider)      mcp_inspector_inject_aider_session_hint     "${agent:-aider}"      ;;
+      ashlrcode)  mcp_inspector_inject_ashlrcode_session_hint "${agent:-ashlrcode}"  ;;
+    esac
+    return 0
+  fi
+
+  # Suggest mode
+  if [ -n "$suggest_task" ]; then
+    mcp_inspector_suggest_prompt "${agent:-}" "$suggest_task"
+    return 0
+  fi
+
+  # Default: show full inventory
+  mcp_inspector_show "${agent:-}"
+
+  # Also detect and report breakage
+  mcp_inspector_detect_breakage || true
+}
+
 # ─── mcp-watch ────────────────────────────────────────────────────────────────
 cmd_mcp_watch() {
   local lib="$SCRIPTS_DIR/lib/mcp-lifecycle.sh"
@@ -614,6 +743,9 @@ ${C_BOLD}COMMANDS${C_RESET}
   ${C_CYAN}mcp-status${C_RESET}     list all MCP server processes (pid, uptime, health) across all agents
   ${C_CYAN}mcp-heal${C_RESET} <agent>  force immediate probe + recovery cycle for one agent's MCP servers
   ${C_CYAN}mcp-watch${C_RESET} [--verbose]  live dashboard of MCP server liveliness (Ctrl-C to stop)
+  ${C_CYAN}tools${C_RESET} [agent]     live MCP tool inventory with cost/latency footnotes
+                     agent: aider|goose|ashlrcode|openhands (optional filter)
+                     flags: --refresh  --suggest "task"  --inject-goose/aider/ashlrcode
   ${C_CYAN}monitor${C_RESET} <sub>   agent auto-restart daemon (start|stop|status)
   ${C_CYAN}replay${C_RESET} <sub>    session replay & divergence detector (list|compare|diff|export|analyze-divergence)
   ${C_CYAN}help${C_RESET}            show this message
@@ -645,7 +777,7 @@ KNOWN_SUBCOMMANDS="start|stop|status|st|health|healthcheck|update|upgrade|doctor
 
 is_known_subcommand() {
   case "$1" in
-    start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|resume|summary|auto|llm-status|llm-backends|mcp-status|mcp-heal|mcp-watch|monitor|replay|help) return 0 ;;
+    start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|resume|summary|auto|llm-status|llm-backends|mcp-status|mcp-heal|mcp-watch|monitor|replay|tools|help) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -716,6 +848,7 @@ case "$cmd" in
   mcp-status)         cmd_mcp_status    "$@" ;;
   mcp-heal)           cmd_mcp_heal      "$@" ;;
   mcp-watch)          cmd_mcp_watch     "$@" ;;
+  tools)              cmd_tools         "$@" ;;
   monitor)            cmd_monitor       "$@" ;;
   replay)
     local replay_script="$SCRIPTS_DIR/session-replay.sh"
