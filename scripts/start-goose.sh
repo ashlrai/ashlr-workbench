@@ -74,10 +74,14 @@ runtime_cfg="$runtime_cfg_dir/config.yaml"
 . "$script_dir/lib/agent-lifecycle.sh"
 # shellcheck source=lib/config-schema-registry.sh
 . "$script_dir/lib/config-schema-registry.sh"
+# shellcheck source=lib/mcp-prelaunch-validator.sh
+. "$script_dir/lib/mcp-prelaunch-validator.sh"
 
-# ── MCP config pre-launch validation gate ─────────────────────────────────────
-# Set ASHLR_MCP_GATE_STRICT=1 to abort launch on validation errors.
+# ── MCP Pre-launch Configuration Gate with Liveness Probe ─────────────────────
+# Runs schema drift detection + JSON-RPC liveness probe for each declared MCP
+# server. Set ASHLR_MCP_GATE_STRICT=1 to abort launch on any liveness failure.
 _MCP_GATE_STRICT="${ASHLR_MCP_GATE_STRICT:-0}"
+# Step 1: schema + config validation (existing gate)
 if [ "$_MCP_GATE_STRICT" = "1" ]; then
   mcp_prelaunch_gate goose --abort-on-error || {
     echo "start-goose: MCP config validation failed (ASHLR_MCP_GATE_STRICT=1)" >&2
@@ -86,6 +90,19 @@ if [ "$_MCP_GATE_STRICT" = "1" ]; then
 else
   mcp_prelaunch_gate goose
 fi
+# Step 2: liveness probe + schema drift detection (new gate)
+if [ "$_MCP_GATE_STRICT" = "1" ]; then
+  mcp_prelaunch_run goose || {
+    echo "start-goose: MCP liveness gate failed (ASHLR_MCP_GATE_STRICT=1)" >&2
+    exit 1
+  }
+else
+  mcp_prelaunch_run goose || true
+fi
+# Step 3: circuit-breaker health probe — detect failures before agent needs MCPs
+# shellcheck source=lib/mcp-health-probe.sh
+. "$script_dir/lib/mcp-health-probe.sh"
+mcp_prelaunch_gate_with_circuit || true
 
 llm_router_init
 llm_router_select goose
@@ -223,6 +240,23 @@ echo "  plugin:    $ASHLR_PLUGIN_ROOT"
 echo ""
 
 cd "$GOOSE_WORKSPACE"
+
+# ------------------------------------------------------------------
+# MCP Capability Negotiation — discover live tool surface at startup.
+# Probes all 10 MCP servers, emits per-agent capability matrix to
+# $WORKBENCH/.cache/mcp-capabilities-goose-<timestamp>.json.
+# Runs with --quiet so it does not clutter interactive output.
+# Non-fatal: errors are suppressed so the agent always starts.
+# ------------------------------------------------------------------
+_MCN_LIB="$script_dir/lib/mcp-capability-negotiation.sh"
+if [ -f "$_MCN_LIB" ]; then
+  # shellcheck source=lib/mcp-capability-negotiation.sh
+  . "$_MCN_LIB"
+  if declare -f mcp_cap_run_discovery >/dev/null 2>&1; then
+    mcp_cap_run_discovery goose --quiet 2>/dev/null || true
+  fi
+fi
+
 # Run (don't `exec`) so the EXIT trap fires after goose returns. `exec` would
 # replace this shell and skip the session_end log. The '${args+"${args[@]}"}'
 # form is bash 3.2-safe for an empty array under `set -u`.

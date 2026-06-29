@@ -22,6 +22,8 @@ set -euo pipefail
 . "$(dirname "$0")/aider-mcp-bridge.sh"
 # shellcheck source=lib/config-schema-registry.sh
 . "$(dirname "$0")/lib/config-schema-registry.sh"
+# shellcheck source=lib/mcp-prelaunch-validator.sh
+. "$(dirname "$0")/lib/mcp-prelaunch-validator.sh"
 CONFIG="$WORKBENCH/agents/aider/aider.conf.yml"
 
 # Resolve target project dir (first positional arg, default cwd)
@@ -34,10 +36,13 @@ if [ ! -d "$PROJECT_DIR" ]; then
 fi
 
 # ------------------------------------------------------------------
-# MCP config pre-launch validation gate
-# Set ASHLR_MCP_GATE_STRICT=1 to abort launch on validation errors.
+# MCP Pre-launch Configuration Gate with Liveness Probe
+# Runs schema drift detection + JSON-RPC liveness probe for each
+# declared MCP server. Set ASHLR_MCP_GATE_STRICT=1 to abort launch
+# on any liveness failure.
 # ------------------------------------------------------------------
 _MCP_GATE_STRICT="${ASHLR_MCP_GATE_STRICT:-0}"
+# Step 1: schema + config validation (existing gate)
 if [ "$_MCP_GATE_STRICT" = "1" ]; then
   mcp_prelaunch_gate aider --abort-on-error || {
     echo "start-aider: MCP config validation failed (ASHLR_MCP_GATE_STRICT=1)" >&2
@@ -46,6 +51,19 @@ if [ "$_MCP_GATE_STRICT" = "1" ]; then
 else
   mcp_prelaunch_gate aider
 fi
+# Step 2: liveness probe + schema drift detection (new gate)
+if [ "$_MCP_GATE_STRICT" = "1" ]; then
+  mcp_prelaunch_run aider || {
+    echo "start-aider: MCP liveness gate failed (ASHLR_MCP_GATE_STRICT=1)" >&2
+    exit 1
+  }
+else
+  mcp_prelaunch_run aider || true
+fi
+# Step 3: circuit-breaker health probe — detect failures before agent needs MCPs
+# shellcheck source=lib/mcp-health-probe.sh
+. "$(dirname "$0")/lib/mcp-health-probe.sh"
+mcp_prelaunch_gate_with_circuit || true
 
 # LLM router: probe all endpoints, select best for aider, gracefully degrade.
 llm_router_init
@@ -152,6 +170,22 @@ trap '
 ' EXIT
 
 cd "$PROJECT_DIR"
+# ------------------------------------------------------------------
+# MCP Capability Negotiation — discover live tool surface at startup.
+# Probes all 10 MCP servers, emits per-agent capability matrix to
+# $WORKBENCH/.cache/mcp-capabilities-aider-<timestamp>.json.
+# Runs with --quiet so it does not clutter interactive output.
+# Non-fatal: errors are suppressed so the agent always starts.
+# ------------------------------------------------------------------
+_MCN_LIB="$(dirname "$0")/lib/mcp-capability-negotiation.sh"
+if [ -f "$_MCN_LIB" ]; then
+  # shellcheck source=lib/mcp-capability-negotiation.sh
+  . "$_MCN_LIB"
+  if declare -f mcp_cap_run_discovery >/dev/null 2>&1; then
+    mcp_cap_run_discovery aider --quiet 2>/dev/null || true
+  fi
+fi
+
 # Run (don't exec) so the EXIT trap fires and writes session_end.
 # Pass routed model + API base; --model and --openai-api-base can be overridden
 # by the caller via extra args (they appear after, so they win).

@@ -36,7 +36,10 @@ fi
 # ------------------------------------------------------------------
 # shellcheck source=lib/config-schema-registry.sh
 . "$(dirname "$0")/lib/config-schema-registry.sh"
+# shellcheck source=lib/mcp-prelaunch-validator.sh
+. "$(dirname "$0")/lib/mcp-prelaunch-validator.sh"
 _MCP_GATE_STRICT="${ASHLR_MCP_GATE_STRICT:-0}"
+# Step 1: schema + config validation (existing gate)
 if [ "$_MCP_GATE_STRICT" = "1" ]; then
   mcp_prelaunch_gate ashlrcode --abort-on-error || {
     echo "start-ashlrcode: MCP config validation failed (ASHLR_MCP_GATE_STRICT=1)" >&2
@@ -45,6 +48,19 @@ if [ "$_MCP_GATE_STRICT" = "1" ]; then
 else
   mcp_prelaunch_gate ashlrcode
 fi
+# Step 2: liveness probe + schema drift detection (new gate)
+if [ "$_MCP_GATE_STRICT" = "1" ]; then
+  mcp_prelaunch_run ashlrcode || {
+    echo "start-ashlrcode: MCP liveness gate failed (ASHLR_MCP_GATE_STRICT=1)" >&2
+    exit 1
+  }
+else
+  mcp_prelaunch_run ashlrcode || true
+fi
+# Step 3: circuit-breaker health probe — detect failures before agent needs MCPs
+# shellcheck source=lib/mcp-health-probe.sh
+. "$(dirname "$0")/lib/mcp-health-probe.sh"
+mcp_prelaunch_gate_with_circuit || true
 
 # ------------------------------------------------------------------
 # Secrets: settings.json references ${XAI_API_KEY}, ${SUPABASE_ACCESS_TOKEN},
@@ -126,6 +142,22 @@ trap '
   fi
   log_session_end ashlrcode "$PWD"
 ' EXIT
+
+# ------------------------------------------------------------------
+# MCP Capability Negotiation — discover live tool surface at startup.
+# Probes all 10 MCP servers, emits per-agent capability matrix to
+# $WORKBENCH/.cache/mcp-capabilities-ashlrcode-<timestamp>.json.
+# Runs with --quiet so it does not clutter interactive output.
+# Non-fatal: errors are suppressed so the agent always starts.
+# ------------------------------------------------------------------
+_MCN_LIB="$(dirname "$0")/lib/mcp-capability-negotiation.sh"
+if [ -f "$_MCN_LIB" ]; then
+  # shellcheck source=lib/mcp-capability-negotiation.sh
+  . "$_MCN_LIB"
+  if declare -f mcp_cap_run_discovery >/dev/null 2>&1; then
+    mcp_cap_run_discovery ashlrcode --quiet 2>/dev/null || true
+  fi
+fi
 
 # Run (don't exec) so the EXIT trap fires and writes session_end.
 ashlrcode "$@"
