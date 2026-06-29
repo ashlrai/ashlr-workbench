@@ -308,6 +308,48 @@ cmd_llm_backends() {
   llm_router_backends "$@"
 }
 
+# ─── mcp-status ───────────────────────────────────────────────────────────────
+cmd_mcp_status() {
+  local lib="$SCRIPTS_DIR/lib/mcp-lifecycle.sh"
+  if [ ! -f "$lib" ]; then
+    bad "mcp-lifecycle.sh not found at $lib"
+    exit 1
+  fi
+  # shellcheck source=scripts/lib/mcp-lifecycle.sh
+  . "$lib"
+  mcp_lc_status "$@"
+}
+
+# ─── mcp-heal ─────────────────────────────────────────────────────────────────
+cmd_mcp_heal() {
+  local agent="${1:-}"
+  if [ -z "$agent" ]; then
+    bad "missing agent name"
+    echo "Usage: aw mcp-heal <openhands|goose|aider|ashlrcode>"
+    exit 2
+  fi
+  local lib="$SCRIPTS_DIR/lib/mcp-lifecycle.sh"
+  if [ ! -f "$lib" ]; then
+    bad "mcp-lifecycle.sh not found at $lib"
+    exit 1
+  fi
+  # shellcheck source=scripts/lib/mcp-lifecycle.sh
+  . "$lib"
+  mcp_lc_heal "$agent"
+}
+
+# ─── mcp-watch ────────────────────────────────────────────────────────────────
+cmd_mcp_watch() {
+  local lib="$SCRIPTS_DIR/lib/mcp-lifecycle.sh"
+  if [ ! -f "$lib" ]; then
+    bad "mcp-lifecycle.sh not found at $lib"
+    exit 1
+  fi
+  # shellcheck source=scripts/lib/mcp-lifecycle.sh
+  . "$lib"
+  mcp_lc_watch "$@"
+}
+
 # ─── monitor ──────────────────────────────────────────────────────────────────
 cmd_monitor() {
   local subcmd="${1:-status}"
@@ -444,6 +486,85 @@ cmd_doctor() {
     info "  V1 uses ~/.openhands; the legacy dir is harmless but can be removed"
   fi
 
+  # ── MCP crash analysis: inspect any dead MCP servers ──────────────────────
+  local mcp_state_dir="${MCP_LC_STATE_DIR:-$HOME/.ashlr-workbench/mcp-lifecycle}"
+  local crash_analyzer_lib="$SCRIPTS_DIR/lib/mcp-crash-analyzer.sh"
+  local lifecycle_lib="$SCRIPTS_DIR/lib/mcp-lifecycle.sh"
+  if [ -d "$mcp_state_dir" ] && [ -f "$crash_analyzer_lib" ]; then
+    local _any_dead=0
+    local _sf
+    for _sf in "$mcp_state_dir"/*__*.state; do
+      [ -f "$_sf" ] || continue
+      local _base _agent _server _pid _health
+      _base="$(basename "$_sf" .state)"
+      _agent="${_base%%__*}"
+      _server="${_base#*__}"
+      _pid="$(grep '^pid=' "$_sf" 2>/dev/null | head -1 | cut -d= -f2)"
+      _health="$(grep '^last_health=' "$_sf" 2>/dev/null | head -1 | cut -d= -f2)"
+      _gs="$(grep '^graceful_shutdown=' "$_sf" 2>/dev/null | head -1 | cut -d= -f2)"
+
+      # Skip gracefully-stopped servers.
+      [ "${_gs:-0}" = "1" ] && continue
+
+      # A dead server: pid=0 or last_health=fail.
+      local _is_dead=0
+      if [ "${_pid:-0}" = "0" ] && [ "${_health:-unknown}" != "ok" ]; then
+        _is_dead=1
+      elif [ -n "$_pid" ] && [ "$_pid" != "0" ]; then
+        kill -0 "$_pid" 2>/dev/null || _is_dead=1
+      fi
+
+      if [ "$_is_dead" -eq 1 ]; then
+        _any_dead=1
+        # Read log snippet for crash analysis.
+        local _log_file="$mcp_state_dir/${_agent}__${_server}.log"
+        local _log_snippet=""
+        [ -f "$_log_file" ] && _log_snippet="$(tail -5 "$_log_file" 2>/dev/null | tr '\n' ' ')"
+
+        # Source the analyzer (idempotent guard inside).
+        # shellcheck source=scripts/lib/mcp-crash-analyzer.sh
+        . "$crash_analyzer_lib" 2>/dev/null || true
+
+        if declare -f analyze_mcp_crash >/dev/null 2>&1; then
+          local _exit_code
+          _exit_code="$(grep '^exit_code=' "$_sf" 2>/dev/null | head -1 | cut -d= -f2)"
+          _exit_code="${_exit_code:-2}"
+          local _analysis
+          _analysis="$(analyze_mcp_crash "$_agent" "$_server" "$_exit_code" "$_log_snippet" "" 2>/dev/null)"
+
+          local _crash_class _strategy _confidence _reason
+          _crash_class="$(printf '%s' "$_analysis" | grep -o '"crash_class":"[^"]*"' | cut -d'"' -f4)"
+          _strategy="$(printf '%s' "$_analysis" | grep -o '"recovery_strategy":"[^"]*"' | cut -d'"' -f4)"
+          _confidence="$(printf '%s' "$_analysis" | grep -o '"confidence":"[^"]*"' | cut -d'"' -f4)"
+          _reason="$(printf '%s' "$_analysis" | grep -o '"reason":"[^"]*"' | cut -d'"' -f4)"
+
+          bad "Dead MCP server: ${_agent}/${_server} (pid=${_pid:-0})"
+          info "  Crash class:  ${_crash_class:-unknown} (confidence: ${_confidence:-low})"
+          info "  Reason:       ${_reason:-unclassified}"
+          case "${_strategy:-}" in
+            restart_immediately)
+              info "  Recovery:     restart immediately (aw mcp-heal ${_agent})"
+              ;;
+            wait_10s_then_restart)
+              info "  Recovery:     wait ~10s then restart (aw mcp-heal ${_agent})"
+              ;;
+            require_config_fix)
+              warn "  Recovery:     config fix required before restarting"
+              info "    Tip: check logs at $mcp_state_dir/${_agent}__${_server}.log"
+              ;;
+            *)
+              info "  Recovery:     aw mcp-heal ${_agent}"
+              ;;
+          esac
+          issues=$((issues + 1))
+        fi
+      fi
+    done
+    if [ "$_any_dead" -eq 0 ] && [ -f "$lifecycle_lib" ]; then
+      ok "MCP servers: no dead servers detected"
+    fi
+  fi
+
   echo
   if [ "$issues" -eq 0 ]; then
     ok "no issues detected"
@@ -490,6 +611,9 @@ ${C_BOLD}COMMANDS${C_RESET}
   ${C_CYAN}summary${C_RESET}         summarize the most recent session
   ${C_CYAN}llm-status${C_RESET}      probe all LLM endpoints and show latency matrix
   ${C_CYAN}llm-backends${C_RESET}   show discovered backends, health, and routing policy (--watch for live)
+  ${C_CYAN}mcp-status${C_RESET}     list all MCP server processes (pid, uptime, health) across all agents
+  ${C_CYAN}mcp-heal${C_RESET} <agent>  force immediate probe + recovery cycle for one agent's MCP servers
+  ${C_CYAN}mcp-watch${C_RESET} [--verbose]  live dashboard of MCP server liveliness (Ctrl-C to stop)
   ${C_CYAN}monitor${C_RESET} <sub>   agent auto-restart daemon (start|stop|status)
   ${C_CYAN}replay${C_RESET} <sub>    session replay & divergence detector (list|compare|diff|export|analyze-divergence)
   ${C_CYAN}help${C_RESET}            show this message
@@ -521,7 +645,7 @@ KNOWN_SUBCOMMANDS="start|stop|status|st|health|healthcheck|update|upgrade|doctor
 
 is_known_subcommand() {
   case "$1" in
-    start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|resume|summary|auto|llm-status|llm-backends|monitor|replay|help) return 0 ;;
+    start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|resume|summary|auto|llm-status|llm-backends|mcp-status|mcp-heal|mcp-watch|monitor|replay|help) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -589,6 +713,9 @@ case "$cmd" in
   summary)            exec "$SCRIPTS_DIR/session-summary.sh" "$@" ;;
   llm-status)         cmd_llm_status    "$@" ;;
   llm-backends)       cmd_llm_backends  "$@" ;;
+  mcp-status)         cmd_mcp_status    "$@" ;;
+  mcp-heal)           cmd_mcp_heal      "$@" ;;
+  mcp-watch)          cmd_mcp_watch     "$@" ;;
   monitor)            cmd_monitor       "$@" ;;
   replay)
     local replay_script="$SCRIPTS_DIR/session-replay.sh"
