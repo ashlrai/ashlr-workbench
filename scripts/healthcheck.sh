@@ -35,6 +35,10 @@ OPENHANDS_CONTAINER="ashlr-openhands"
 # shellcheck source=scripts/lib/mcp-recovery.sh
 . "$SCRIPT_DIR/lib/mcp-recovery.sh"
 
+# Source the MCP lifecycle manager (provides mcp_lc_status + probe integration).
+# shellcheck source=scripts/lib/mcp-lifecycle.sh
+. "$SCRIPT_DIR/lib/mcp-lifecycle.sh"
+
 # Source the config validation library (provides validate_all_agent_configs).
 # shellcheck source=scripts/lib/config-validate.sh
 . "$SCRIPT_DIR/lib/config-validate.sh"
@@ -485,6 +489,76 @@ fi
 # that want to inspect it, but the healthcheck itself does not need it after
 # printing the report).
 # Note: we intentionally do NOT rm here — callers may read it after healthcheck.
+
+# ─── 14. MCP Lifecycle Manager ────────────────────────────────────────────────
+# Shows current tracked MCP server state from mcp-lifecycle.sh, if any servers
+# have been registered (i.e. agents have been started via aw start).
+# This is informational — no failures are emitted if nothing is registered yet.
+section "MCP Lifecycle"
+if [ -d "${MCP_LC_STATE_DIR:-$HOME/.ashlr-workbench/mcp-lifecycle}" ]; then
+  _lc_count=0
+  _lc_count="$(find "${MCP_LC_STATE_DIR:-$HOME/.ashlr-workbench/mcp-lifecycle}" -name '*.state' 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "${_lc_count:-0}" -gt 0 ]; then
+    ok "mcp-lifecycle: ${_lc_count} server(s) tracked (run \`aw mcp-status\` for details)"
+    mcp_lc_status 2>/dev/null || true
+  else
+    info "mcp-lifecycle: no servers tracked yet (start agents first via \`aw start <agent>\`)"
+    # Count as pass — absence of tracked servers is not an error.
+    PASS=$((PASS+1))
+  fi
+else
+  info "mcp-lifecycle: state dir not yet created (start agents first)"
+  PASS=$((PASS+1))
+fi
+
+# ─── 14b. MCP Contract Probes ─────────────────────────────────────────────────
+# Validates that each of the 10 ashlr-plugin MCP servers actually exposes the
+# tools claimed in the static schema registry (mcp-contract-validator.sh).
+# For each server: start in isolation via bun, perform tools/list RPC, assert
+# all expected tools present with description + inputSchema.
+# Outputs a compliance matrix: server × expected-tool × present/match.
+# Skips gracefully when the plugin is absent or bun is not on PATH.
+section "MCP Contract Probes"
+
+_MCP_CONTRACT_LIB="$SCRIPT_DIR/lib/mcp-contract-validator.sh"
+if [ ! -f "$_MCP_CONTRACT_LIB" ]; then
+  warn "mcp-contract-validator.sh not found at $_MCP_CONTRACT_LIB — skipping"
+else
+  # Source the contract validator.
+  # shellcheck source=scripts/lib/mcp-contract-validator.sh
+  . "$_MCP_CONTRACT_LIB"
+
+  # Run validate_all; capture output for summary extraction.
+  _contract_output="$(
+    NO_COLOR=1 \
+    ASHLR_PLUGIN_DIR="${ASHLR_PLUGIN_DIR:-$HOME/Desktop/ashlr-plugin}" \
+    MCP_CONTRACT_TIMEOUT="${MCP_CONTRACT_TIMEOUT:-6}" \
+    mcp_contract_validate_all 2>/dev/null
+  )" || true
+
+  # Extract counts from the Contracts summary line.
+  _contract_summary="$(printf '%s' "$_contract_output" | grep 'Contracts:' | tail -1 || true)"
+  _contract_pass="$(printf '%s' "$_contract_summary" | grep -oE '[0-9]+ passed'  | grep -oE '[0-9]+' || echo 0)"
+  _contract_fail="$(printf '%s' "$_contract_summary" | grep -oE '[0-9]+ failed'  | grep -oE '[0-9]+' || echo 0)"
+  _contract_skip="$(printf '%s' "$_contract_summary" | grep -oE '[0-9]+ skipped' | grep -oE '[0-9]+' || echo 0)"
+
+  if [ "${_contract_fail:-0}" -gt 0 ]; then
+    bad "MCP contracts: ${_contract_pass} passed, ${_contract_fail} failed, ${_contract_skip} skipped (schema drift detected)"
+    # Print FAIL lines for quick diagnosis.
+    printf '%s' "$_contract_output" | grep '^  .*FAIL' | head -10 | while IFS= read -r _cline; do
+      printf "    %s\n" "$_cline"
+    done
+    FAIL=$((FAIL+1))
+  elif [ -n "$_contract_summary" ]; then
+    if [ "${_contract_skip:-0}" -gt 0 ] && [ "${_contract_pass:-0}" -eq 0 ]; then
+      warn "MCP contracts: all servers skipped (plugin/runtime unavailable) — ${_contract_skip} skipped"
+    else
+      ok "MCP contracts: ${_contract_pass} passed, ${_contract_skip} skipped"
+    fi
+  else
+    warn "MCP contracts: validator produced no summary — run manually: bash tests/mcp-runtime-contracts.bats"
+  fi
+fi
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n%sResult:%s %s%d passed%s, %s%d warnings%s, %s%d failed%s\n" \
