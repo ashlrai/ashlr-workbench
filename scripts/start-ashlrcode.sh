@@ -18,6 +18,8 @@ set -euo pipefail
 . "$(dirname "$0")/lib/config.sh"
 # shellcheck source=lib/llm-router.sh
 . "$(dirname "$0")/lib/llm-router.sh"
+# shellcheck source=lib/llm-metrics.sh
+[ -f "$(dirname "$0")/lib/llm-metrics.sh" ] && . "$(dirname "$0")/lib/llm-metrics.sh" && llm_metrics_inject_hook "ashlrcode"
 # shellcheck source=lib/agent-lifecycle.sh
 . "$(dirname "$0")/lib/agent-lifecycle.sh"
 WB_CONFIG_DIR="$WORKBENCH/agents/ashlrcode"
@@ -126,9 +128,15 @@ fi
 _SE_AC_START="$(date +%s)"
 on_agent_start "ashlrcode" "$$" "${AC_MODEL:-${LLM_PRIMARY:-unknown}}" "$_SE_AC_MCP"
 replay_session_init "ashlrcode" "${AC_MODEL:-${LLM_PRIMARY:-unknown}}" "$_SE_AC_MCP" "$PWD"
-# Register with lifecycle manager and install shutdown traps.
+# Register with lifecycle manager. NOTE: we intentionally do NOT call
+# agent_lifecycle_install_traps here — it would install its own `trap … EXIT`
+# which the script's combined EXIT trap below would silently overwrite (so
+# lifecycle cleanup would never run). Instead we install ONE EXIT trap that
+# performs session cleanup AND agent_lifecycle_cleanup, plus a matching INT
+# trap so Ctrl-C is handled identically. agent_lifecycle_cleanup is
+# idempotent (it only signals still-alive PIDs), so the INT→EXIT double call
+# is harmless.
 agent_lifecycle_register "ashlrcode" "$$"
-agent_lifecycle_install_traps
 trap '
   _SE_AC_RC=$?
   _SE_AC_DUR=$(( $(date +%s) - _SE_AC_START ))
@@ -141,7 +149,9 @@ trap '
     replay_session_end "ashlrcode" "$_SE_AC_DUR" "ok"
   fi
   log_session_end ashlrcode "$PWD"
+  agent_lifecycle_cleanup
 ' EXIT
+trap 'exit 130' INT
 
 # ------------------------------------------------------------------
 # MCP Capability Negotiation — discover live tool surface at startup.

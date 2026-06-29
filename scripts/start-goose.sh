@@ -70,6 +70,8 @@ runtime_cfg="$runtime_cfg_dir/config.yaml"
 . "$script_dir/lib/config.sh"
 # shellcheck source=lib/llm-router.sh
 . "$script_dir/lib/llm-router.sh"
+# shellcheck source=lib/llm-metrics.sh
+[ -f "$script_dir/lib/llm-metrics.sh" ] && . "$script_dir/lib/llm-metrics.sh" && llm_metrics_inject_hook "goose"
 # shellcheck source=lib/agent-lifecycle.sh
 . "$script_dir/lib/agent-lifecycle.sh"
 # shellcheck source=lib/config-schema-registry.sh
@@ -169,9 +171,15 @@ fi
 _SE_GOOSE_START="$(date +%s)"
 on_agent_start "goose" "$$" "${LLM_PRIMARY_BACKEND:-lm-studio}/${LLM_PRIMARY_MODEL:-qwen3-coder-30b}" "$_SE_GOOSE_MCP"
 replay_session_init "goose" "${LLM_PRIMARY_BACKEND:-lm-studio}/${LLM_PRIMARY_MODEL:-qwen3-coder-30b}" "$_SE_GOOSE_MCP" "$GOOSE_WORKSPACE"
-# Register with lifecycle manager and install shutdown traps.
+# Register with lifecycle manager. NOTE: we intentionally do NOT call
+# agent_lifecycle_install_traps here — it would install its own `trap … EXIT`
+# which the script's combined EXIT trap below would silently overwrite (so
+# lifecycle cleanup would never run). Instead we install ONE EXIT trap that
+# performs session cleanup AND agent_lifecycle_cleanup, plus a matching INT
+# trap so Ctrl-C is handled identically. agent_lifecycle_cleanup is
+# idempotent (it only signals still-alive PIDs), so the INT→EXIT double call
+# is harmless.
 agent_lifecycle_register "goose" "$$"
-agent_lifecycle_install_traps
 trap '
   _SE_GOOSE_RC=$?
   _SE_GOOSE_DUR=$(( $(date +%s) - _SE_GOOSE_START ))
@@ -184,7 +192,9 @@ trap '
     replay_session_end "goose" "$_SE_GOOSE_DUR" "ok"
   fi
   log_session_end goose "$GOOSE_WORKSPACE"
+  agent_lifecycle_cleanup
 ' EXIT
+trap 'exit 130' INT
 
 # ─── Sanity checks ────────────────────────────────────────────────────────────
 if ! command -v goose >/dev/null 2>&1; then
