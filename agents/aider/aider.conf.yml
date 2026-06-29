@@ -64,3 +64,32 @@ check-update: false
 # Chat + input history local to the repo (add to .gitignore or .aiderignore)
 chat-history-file: .aider.chat.history.md
 input-history-file: .aider.input.history
+
+# ------------------------------------------------------------------
+# Aider MCP Bridge — ashlr-plugin tool wrappers via /run
+# ------------------------------------------------------------------
+# start-aider.sh initializes the bridge before launching Aider, writing
+# thin wrapper scripts to a temp bin dir and prepending it to PATH.
+# Inside an Aider session use:  /run ashlr__<tool> [args]
+#
+# Bridge command (invoked by start-aider.sh automatically):
+#   bridge-command: bash $WORKBENCH/scripts/aider-mcp-bridge.sh
+#
+# Available tools (10 ashlr-plugin MCP tools):
+#   ashlr__read    — read a file with snipCompact truncation
+#   ashlr__grep    — genome-aware repo search
+#   ashlr__bash    — run a shell command with head+tail compression
+#   ashlr__edit    — strict search/replace with diff output
+#   ashlr__ls      — compact directory listing
+#   ashlr__tree    — Unicode project tree with size/count
+#   ashlr__diff    — semantic + structural diff between files
+#   ashlr__http    — HTTP fetch with compression
+#   ashlr__orient  — codebase orientation summary
+#   ashlr__savings — lifetime token/cost savings report
+#
+# Prerequisites:
+#   - ashlr-plugin cloned at ~/Desktop/ashlr-plugin (ASHLR_PLUGIN_DIR)
+#   - bun on PATH  (curl -fsSL https://bun.sh/install | bash)
+#   - bun install run inside ~/Desktop/ashlr-plugin
+#
+# See docs/integration/aider-mcp.md for usage, troubleshooting, and examples.

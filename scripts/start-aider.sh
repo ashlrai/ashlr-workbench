@@ -16,6 +16,8 @@ set -euo pipefail
 . "$(dirname "$0")/lib/config.sh"
 # shellcheck source=lib/llm-router.sh
 . "$(dirname "$0")/lib/llm-router.sh"
+# shellcheck source=aider-mcp-bridge.sh
+. "$(dirname "$0")/aider-mcp-bridge.sh"
 CONFIG="$WORKBENCH/agents/aider/aider.conf.yml"
 
 # Resolve target project dir (first positional arg, default cwd)
@@ -87,6 +89,10 @@ ENDPOINT="${_AIDER_BASE_URL:-${LM_STUDIO_URL}}"
 . "$(dirname "$0")/lib/session-events.sh"
 # shellcheck source=lib/session-replay-log.sh
 . "$(dirname "$0")/lib/session-replay-log.sh"
+# MCP bridge — expose ashlr tools as /run commands inside Aider.
+# Must be initialized before the EXIT trap so cleanup fires correctly.
+aider_mcp_bridge_init
+
 log_session_start aider "$PROJECT_DIR"
 _SE_AIDER_START="$(date +%s)"
 # Determine MCP count from aider config (yaml entries under mcp-servers key)
@@ -121,6 +127,7 @@ trap '
     replay_session_end "aider" "$_SE_AIDER_DUR" "ok"
   fi
   log_session_end aider "$PROJECT_DIR"
+  aider_mcp_bridge_cleanup
 ' EXIT
 
 cd "$PROJECT_DIR"
