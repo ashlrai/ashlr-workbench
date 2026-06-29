@@ -31,6 +31,10 @@ OPENHANDS_CONTAINER="ashlr-openhands"
 # shellcheck source=scripts/lib/mcp-probe.sh
 . "$SCRIPT_DIR/lib/mcp-probe.sh"
 
+# Source the MCP recovery harness (provides mcp_recovery_probe_all + report).
+# shellcheck source=scripts/lib/mcp-recovery.sh
+. "$SCRIPT_DIR/lib/mcp-recovery.sh"
+
 # Source the config validation library (provides validate_all_agent_configs).
 # shellcheck source=scripts/lib/config-validate.sh
 . "$SCRIPT_DIR/lib/config-validate.sh"
@@ -411,6 +415,76 @@ else
     warn "Tool matrix: gen-tool-matrix.sh produced no output (run manually to debug)"
   fi
 fi
+
+# ─── 13. MCP Resilience ───────────────────────────────────────────────────────
+# Uses mcp-recovery.sh to attempt a startup probe for each of the 10
+# ashlr-plugin MCP servers and reports: % successfully startable + which are
+# flaky.  Failures are emitted as structured JSONL to MCP_FAILURES_JSONL so
+# callers (CI, agent launchers) can inspect them programmatically.
+#
+# This section runs AFTER the liveliness probe (section 1b) so any fast-fail
+# data is already visible.  It deliberately continues on failure so the agent
+# can launch with reduced capability.
+section "MCP Resilience"
+
+_MCP_REC_FAILURES="${_TMPDIR:-/tmp}/mcp-failures-hc-$$.jsonl"
+MCP_FAILURES_JSONL="$_MCP_REC_FAILURES"
+MCP_UNAVAILABLE=""
+MCP_RECOVERY_TIMEOUT="${MCP_RECOVERY_TIMEOUT:-5}"
+MCP_RECOVERY_TOTAL_SERVERS=10
+export MCP_FAILURES_JSONL MCP_UNAVAILABLE MCP_RECOVERY_TIMEOUT MCP_RECOVERY_TOTAL_SERVERS
+
+_mcp_rec_plugin_dir="${ASHLR_PLUGIN_DIR:-$HOME/Desktop/ashlr-plugin}"
+_mcp_rec_servers_dir="$_mcp_rec_plugin_dir/servers"
+
+if [ ! -d "$_mcp_rec_plugin_dir" ]; then
+  warn "MCP Resilience: ashlr-plugin not found at $_mcp_rec_plugin_dir — skipping"
+elif [ ! -d "$_mcp_rec_servers_dir" ]; then
+  warn "MCP Resilience: servers/ directory missing in $_mcp_rec_plugin_dir — skipping"
+elif ! command -v bun >/dev/null 2>&1 && ! command -v node >/dev/null 2>&1; then
+  warn "MCP Resilience: neither bun nor node on PATH — skipping startup probes"
+else
+  _mcp_rec_names="efficiency sql bash tree http diff logs genome orient github"
+  for _mcp_rec_name in $_mcp_rec_names; do
+    _mcp_rec_entry="$_mcp_rec_servers_dir/${_mcp_rec_name}-server.ts"
+    _mcp_rec_rc=0
+    mcp_recovery_probe_server "$_mcp_rec_name" "$_mcp_rec_entry" || _mcp_rec_rc=$?
+    case "$_mcp_rec_rc" in
+      0)
+        ok "mcp-recovery: ashlr-${_mcp_rec_name} started OK"
+        ;;
+      3)
+        bad "mcp-recovery: ashlr-${_mcp_rec_name} — entry file missing"
+        ;;
+      4)
+        warn "mcp-recovery: ashlr-${_mcp_rec_name} — no runtime (bun/node)"
+        ;;
+      5)
+        bad "mcp-recovery: ashlr-${_mcp_rec_name} — parse/syntax error"
+        ;;
+      2)
+        bad "mcp-recovery: ashlr-${_mcp_rec_name} — crashed on startup"
+        ;;
+      1)
+        warn "mcp-recovery: ashlr-${_mcp_rec_name} — startup timeout (${MCP_RECOVERY_TIMEOUT}s)"
+        ;;
+      *)
+        bad "mcp-recovery: ashlr-${_mcp_rec_name} — unexpected rc=${_mcp_rec_rc}"
+        ;;
+    esac
+  done
+
+  # Print the resilience summary (% OK + flaky list).
+  mcp_recovery_report
+
+  # Export MCP_UNAVAILABLE so agent launchers sourcing this script inherit it.
+  export MCP_UNAVAILABLE
+fi
+
+# Clean up temp JSONL (it is also referenced by MCP_FAILURES_JSONL for callers
+# that want to inspect it, but the healthcheck itself does not need it after
+# printing the report).
+# Note: we intentionally do NOT rm here — callers may read it after healthcheck.
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n%sResult:%s %s%d passed%s, %s%d warnings%s, %s%d failed%s\n" \
