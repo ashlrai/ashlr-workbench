@@ -51,6 +51,23 @@ OPENHANDS_CONTAINER="ashlr-openhands"
 # shellcheck source=scripts/lib/config-schema-registry.sh
 . "$SCRIPT_DIR/lib/config-schema-registry.sh"
 
+# ─── --perf flag: parse early so the profiler can be sourced conditionally ────
+_HC_RUN_PERF=0
+_HC_ARGS_REMAINING=""
+for _a in "$@"; do
+  case "$_a" in
+    --perf) _HC_RUN_PERF=1 ;;
+    *)      _HC_ARGS_REMAINING="${_HC_ARGS_REMAINING} ${_a}" ;;
+  esac
+done
+
+# Source the MCP perf profiler when --perf requested (or always — it's no-op
+# unless functions are called, and it defines helpers used in section 16).
+# shellcheck source=scripts/lib/mcp-perf-profiler.sh
+if [ -f "$SCRIPT_DIR/lib/mcp-perf-profiler.sh" ]; then
+  . "$SCRIPT_DIR/lib/mcp-perf-profiler.sh"
+fi
+
 # ─── Colors ───────────────────────────────────────────────────────────────────
 if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then
   C_RESET=""; C_RED=""; C_GREEN=""; C_YELLOW=""; C_BOLD=""; C_DIM=""
@@ -557,6 +574,118 @@ else
     fi
   else
     warn "MCP contracts: validator produced no summary — run manually: bash tests/mcp-runtime-contracts.bats"
+  fi
+fi
+
+# ─── 15. Config Migration Audit (warning-only) ────────────────────────────────
+# Runs config-migration-audit.sh to detect stale or breaking config keys across
+# all four agents.  This check is warning-only: it surfaces issues in the output
+# but does NOT increment FAIL, so healthcheck.sh still exits 0 when only
+# migration warnings are present.  Operators should address them before the next
+# agent upgrade.
+section "Config Migration Audit"
+
+_MIGRATION_AUDIT_SCRIPT="$SCRIPT_DIR/config-migration-audit.sh"
+if [ ! -f "$_MIGRATION_AUDIT_SCRIPT" ]; then
+  warn "config-migration-audit.sh not found at $_MIGRATION_AUDIT_SCRIPT — skipping"
+elif [ ! -x "$_MIGRATION_AUDIT_SCRIPT" ]; then
+  warn "config-migration-audit.sh not executable — run: chmod +x $_MIGRATION_AUDIT_SCRIPT"
+else
+  _AUDIT_REPORT="$(mktemp /tmp/cma-hc-XXXXXX.json)"
+  _AUDIT_OUTPUT="$(
+    NO_COLOR=1 \
+    bash "$_MIGRATION_AUDIT_SCRIPT" \
+      --output "$_AUDIT_REPORT" \
+      --quiet \
+      2>&1
+  )" || true
+
+  # Parse summary from the JSON report (python3 is used project-wide).
+  if command -v python3 >/dev/null 2>&1 && [ -s "$_AUDIT_REPORT" ]; then
+    _AUDIT_STATUS="$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$_AUDIT_REPORT'))
+    s = d.get('summary', {})
+    print('%s dep=%s brk=%s mig=%s' % (
+        s.get('status','unknown'),
+        s.get('total_deprecated',0),
+        s.get('total_breaking',0),
+        s.get('total_migrated',0),
+    ))
+except Exception as e:
+    print('parse_error: %s' % e)
+" 2>/dev/null || echo 'unknown')"
+
+    _AUDIT_BRK="$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$_AUDIT_REPORT'))
+    print(d.get('summary',{}).get('total_breaking',0))
+except:
+    print(0)
+" 2>/dev/null || echo 0)"
+
+    _AUDIT_DEP="$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('$_AUDIT_REPORT'))
+    print(d.get('summary',{}).get('total_deprecated',0))
+except:
+    print(0)
+" 2>/dev/null || echo 0)"
+
+    if [ "${_AUDIT_BRK:-0}" -gt 0 ]; then
+      # Breaking changes — warn (not fail) so healthcheck still exits 0
+      warn "config-migration-audit: ${_AUDIT_BRK} breaking change(s) require manual intervention — run: bash $SCRIPT_DIR/config-migration-audit.sh"
+    elif [ "${_AUDIT_DEP:-0}" -gt 0 ]; then
+      warn "config-migration-audit: ${_AUDIT_DEP} deprecated key(s) found — run: bash $SCRIPT_DIR/config-migration-audit.sh --auto-migrate"
+    else
+      ok "config-migration-audit: all agent configs are migration-clean"
+    fi
+    ok "config-migration-audit report: $_AUDIT_REPORT"
+  else
+    warn "config-migration-audit: could not parse JSON report — run manually: bash $_MIGRATION_AUDIT_SCRIPT"
+  fi
+fi
+
+# ─── 16. MCP Performance Baseline (--perf only) ───────────────────────────────
+# When invoked with --perf, run a 1-minute baseline profile across all 10
+# ashlr-plugin MCP tools × all 4 agents, emit JSONL to
+# ~/.ashlr-workbench/mcp-perf.jsonl, and print a latency summary.
+# Skips gracefully when the plugin or profiler library is unavailable.
+if [ "$_HC_RUN_PERF" -eq 1 ]; then
+  section "MCP Performance Baseline (--perf)"
+
+  _PERF_DASHBOARD="$SCRIPT_DIR/mcp-perf-dashboard.sh"
+
+  if ! declare -f mcp_perf_baseline_all >/dev/null 2>&1; then
+    warn "mcp-perf-profiler.sh not loaded — skipping perf baseline"
+  elif [ ! -d "${ASHLR_PLUGIN_DIR:-$HOME/Desktop/ashlr-plugin}/servers" ]; then
+    warn "ashlr-plugin servers/ not found — skipping perf baseline"
+  elif ! command -v bun >/dev/null 2>&1 && ! command -v node >/dev/null 2>&1; then
+    warn "neither bun nor node on PATH — skipping perf baseline"
+  else
+    info "Running 1-minute baseline profile (all tools × all agents)..."
+    MCP_PERF_BASELINE_TIMEOUT="${MCP_PERF_BASELINE_TIMEOUT:-60}" \
+    mcp_perf_baseline_all 60
+    PASS=$((PASS+1))
+
+    # Show dashboard summary inline if the dashboard script is available.
+    if [ -x "$_PERF_DASHBOARD" ]; then
+      _perf_dash_output="$(
+        NO_COLOR=1 \
+        MCP_PERF_SLA_MS="${MCP_PERF_SLA_MS:-2000}" \
+        MCP_PERF_WARN_MS="${MCP_PERF_WARN_MS:-1000}" \
+        bash "$_PERF_DASHBOARD" 2>/dev/null
+      )" || true
+      if [ -n "$_perf_dash_output" ]; then
+        printf '%s\n' "$_perf_dash_output" | while IFS= read -r _pline; do
+          printf "    %s\n" "$_pline"
+        done
+        ok "MCP perf dashboard rendered (run: aw log perf)"
+      fi
+    fi
   fi
 fi
 

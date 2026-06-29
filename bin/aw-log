@@ -142,6 +142,7 @@ ${C_BOLD}COMMANDS${C_RESET}
   tail [--agent <name>]     stream new entries as they are appended
   recent [N]                last N entries (default 20), newest first
   stats                     counts by agent / event + last-24h activity
+  perf [--csv] [--sla N]    MCP tool latency dashboard (p50/p95/p99 heatmap)
   session-analytics         structured session retrospective (uptime, errors, shape)
   filter --agent <name>     all entries matching agent (newest first)
   rotate                    force rotation (renames → .jsonl.1)
@@ -305,6 +306,19 @@ cmd_rotate() {
   printf "%s✓%s rotated → %s.1\n" "$C_GREEN" "$C_RESET" "$LOG_PATH"
 }
 
+# ─── cmd: perf ────────────────────────────────────────────────────────────────
+# Delegate to mcp-perf-dashboard.sh — pass all args through unchanged.
+cmd_perf() {
+  local dashboard="$_AW_LOG_BIN_DIR/../scripts/mcp-perf-dashboard.sh"
+  if [ ! -f "$dashboard" ]; then
+    die "mcp-perf-dashboard.sh not found at $dashboard"
+  fi
+  if [ ! -x "$dashboard" ]; then
+    die "mcp-perf-dashboard.sh is not executable — run: chmod +x $dashboard"
+  fi
+  exec "$dashboard" "$@"
+}
+
 # ─── dispatch ─────────────────────────────────────────────────────────────────
 main() {
   local cmd="${1:-help}"
@@ -313,6 +327,7 @@ main() {
     tail)          cmd_tail "$@" ;;
     recent)        cmd_recent "$@" ;;
     stats)         cmd_stats "$@" ;;
+    perf)          cmd_perf "$@" ;;
     session-analytics|analytics)
       if [ -x "$_AW_LOG_ANALYTICS" ]; then
         exec "$_AW_LOG_ANALYTICS" "$@"
