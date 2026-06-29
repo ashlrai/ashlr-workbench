@@ -1,0 +1,79 @@
+# monitor.yaml — Agent supervisor configuration for ashlr-workbench.
+#
+# The monitor daemon (scripts/agent-monitor.sh) reads this file on start and
+# polls each listed agent every CHECK_INTERVAL_SECS seconds. On crash/hang
+# detection it attempts a graceful restart up to MAX_RESTARTS times within
+# BACKOFF_WINDOW_SECS, then backs off.
+#
+# Override any scalar with an env var of the same name (all caps).
+#
+# Fields per agent entry:
+#   name          — unique identifier, must match scripts/start-<name>.sh
+#   enabled       — set to false to skip supervision without removing the entry
+#   check_type    — "docker" (docker inspect) or "pgrep" (process grep)
+#   check_target  — container name (docker) or process pattern (pgrep)
+#   start_script  — path relative to WORKBENCH for the restart script
+#   max_restarts  — maximum restarts within the backoff window before giving up
+#   backoff_window_secs — rolling window used to count restarts
+#   initial_backoff_secs  — wait time before the first restart attempt
+#   max_backoff_secs      — cap for exponential backoff between retries
+#   restart_cooldown_secs — minimum gap between any two restart attempts
+
+# ─── Global defaults (overridable via env) ────────────────────────────────────
+defaults:
+  check_interval_secs: 10
+  max_restarts: 5
+  backoff_window_secs: 300
+  initial_backoff_secs: 5
+  max_backoff_secs: 120
+  restart_cooldown_secs: 30
+
+# ─── Supervised agents ────────────────────────────────────────────────────────
+agents:
+  - name: openhands
+    enabled: true
+    check_type: docker
+    check_target: ashlr-openhands
+    start_script: scripts/start-openhands.sh
+    max_restarts: 3
+    backoff_window_secs: 300
+    initial_backoff_secs: 10
+    max_backoff_secs: 120
+    restart_cooldown_secs: 30
+
+  # CLI agents (goose, aider, ashlrcode) are interactive processes — they are
+  # not supervised by default because they run in a user tty and are expected
+  # to exit naturally. Flip enabled: true and set check_target to the process
+  # name if you run them as background daemons.
+  - name: goose
+    enabled: false
+    check_type: pgrep
+    check_target: goose
+    start_script: scripts/start-goose.sh
+    max_restarts: 3
+    backoff_window_secs: 180
+    initial_backoff_secs: 5
+    max_backoff_secs: 60
+    restart_cooldown_secs: 15
+
+  - name: aider
+    enabled: false
+    check_type: pgrep
+    check_target: aider
+    start_script: scripts/start-aider.sh
+    max_restarts: 3
+    backoff_window_secs: 180
+    initial_backoff_secs: 5
+    max_backoff_secs: 60
+    restart_cooldown_secs: 15
+
+  - name: ashlrcode
+    enabled: false
+    check_type: pgrep
+    check_target: ashlrcode
+    start_script: scripts/start-ashlrcode.sh
+    max_restarts: 3
+    backoff_window_secs: 180
+    initial_backoff_secs: 5
+    max_backoff_secs: 60
+    restart_cooldown_secs: 15

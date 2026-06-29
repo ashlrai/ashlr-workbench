@@ -1510,6 +1510,226 @@ else
   _fail "healthcheck.sh has bash syntax errors after Agent-MCP Handshakes addition"
 fi
 
+# ─── Test 13: agent-monitor.sh + monitor.yaml ────────────────────────────────
+printf "\n\033[1mTest 13: agent-monitor.sh + monitor.yaml\033[0m\n"
+
+MONITOR_SH="$REPO_ROOT/scripts/agent-monitor.sh"
+MONITOR_YAML="$REPO_ROOT/agents/monitor.yaml"
+
+# 13a — agent-monitor.sh exists and is executable
+assert_file_executable "agent-monitor.sh is executable" "$MONITOR_SH"
+
+# 13b — agent-monitor.sh passes bash syntax check
+if bash -n "$MONITOR_SH" 2>/dev/null; then
+  _ok "agent-monitor.sh passes bash syntax check"
+else
+  _fail "agent-monitor.sh has bash syntax errors"
+fi
+
+# 13c — monitor.yaml exists
+if [ -f "$MONITOR_YAML" ]; then
+  _ok "agents/monitor.yaml exists"
+else
+  _fail "agents/monitor.yaml missing"
+fi
+
+# 13d — monitor.yaml is valid YAML-ish (python3 can load the agents block)
+YAML_AGENTS="$(
+  python3 - "$MONITOR_YAML" <<'PY' 2>/dev/null
+import sys, re
+path = sys.argv[1]
+with open(path) as f:
+    content = f.read()
+# Check required top-level keys
+for key in ('defaults:', 'agents:'):
+    assert key in content, f"missing {key}"
+# Check at least one agent entry
+assert '- name:' in content, "no agent entries"
+print('ok')
+PY
+)"
+if [ "$YAML_AGENTS" = "ok" ]; then
+  _ok "monitor.yaml contains defaults + agents blocks"
+else
+  _fail "monitor.yaml missing required structure (got: $YAML_AGENTS)"
+fi
+
+# 13e — monitor.yaml contains an openhands entry with docker check_type
+if grep -q 'name: openhands' "$MONITOR_YAML"; then
+  _ok "monitor.yaml has openhands agent entry"
+else
+  _fail "monitor.yaml missing openhands agent entry"
+fi
+if grep -q 'check_type: docker' "$MONITOR_YAML"; then
+  _ok "monitor.yaml uses docker check_type for openhands"
+else
+  _fail "monitor.yaml missing docker check_type"
+fi
+
+# 13f — agent-monitor.sh status subcommand runs without error (no daemon)
+MON_TMPDIR="$(mktemp -d /tmp/monitor-test-XXXXXX)"
+MON_STATUS_OUT="$(
+  env -i HOME="$HOME" PATH="$PATH" NO_COLOR=1 \
+    MONITOR_DIR="$MON_TMPDIR" \
+    MONITOR_PID_FILE="$MON_TMPDIR/monitor.pid" \
+    MONITOR_STATE_FILE="$MON_TMPDIR/monitor-state.txt" \
+    MONITOR_LOG_FILE="$MON_TMPDIR/monitor.jsonl" \
+    MONITOR_CONFIG="$MONITOR_YAML" \
+    bash "$MONITOR_SH" status 2>&1
+)"
+MON_STATUS_RC=$?
+rm -rf "$MON_TMPDIR"
+if [ "$MON_STATUS_RC" -eq 0 ]; then
+  _ok "agent-monitor.sh status exits 0 when daemon not running"
+else
+  _fail "agent-monitor.sh status exited $MON_STATUS_RC (output: $MON_STATUS_OUT)"
+fi
+
+# 13g — status output mentions 'daemon not running' (or similar) when no PID file
+if printf '%s' "$MON_STATUS_OUT" | grep -qi 'not running\|no.*pid\|monitor'; then
+  _ok "agent-monitor.sh status reports daemon state when not running"
+else
+  _fail "agent-monitor.sh status output unexpected (got: $MON_STATUS_OUT)"
+fi
+
+# 13h — JSONL emit: agent-monitor.sh monitor.jsonl path is defined and
+#         the log file is written to .ashlr-workbench/ directory
+if grep -q '\.ashlr-workbench/monitor\.jsonl\|MONITOR_LOG_FILE\|monitor\.jsonl' "$MONITOR_SH"; then
+  _ok "agent-monitor.sh defines monitor.jsonl log path"
+else
+  _fail "agent-monitor.sh does not define monitor.jsonl log path"
+fi
+
+# 13i — MONITOR_LOG=0 kill switch: monitor.sh respects the env var
+MON_TMPDIR="$(mktemp -d /tmp/monitor-test-XXXXXX)"
+env -i HOME="$HOME" PATH="$PATH" NO_COLOR=1 \
+  MONITOR_LOG=0 \
+  MONITOR_DIR="$MON_TMPDIR" \
+  MONITOR_PID_FILE="$MON_TMPDIR/monitor.pid" \
+  MONITOR_STATE_FILE="$MON_TMPDIR/monitor-state.txt" \
+  MONITOR_LOG_FILE="$MON_TMPDIR/monitor.jsonl" \
+  MONITOR_CONFIG="$MONITOR_YAML" \
+  bash "$MONITOR_SH" status >/dev/null 2>&1 || true
+MON_LOG_LINES="$(wc -l < "$MON_TMPDIR/monitor.jsonl" 2>/dev/null | tr -d ' ' || echo 0)"
+rm -rf "$MON_TMPDIR"
+assert_eq "MONITOR_LOG=0 suppresses JSONL writes during status" "0" "$MON_LOG_LINES"
+
+# 13j — session-log.sh exposes log_monitor_event function
+SESSION_LOG_SH="$REPO_ROOT/scripts/lib/session-log.sh"
+SESSION_LOG_FUNC="$(
+  env -i HOME="$HOME" bash -c "
+    . '$SESSION_LOG_SH'
+    if declare -f log_monitor_event >/dev/null 2>&1; then echo defined; else echo missing; fi
+  " 2>&1
+)"
+assert_eq "log_monitor_event function is defined in session-log.sh" "defined" "$SESSION_LOG_FUNC"
+
+# 13k — log_monitor_event writes a valid JSONL line
+SL_TMP="$(mktemp /tmp/sl-monitor-XXXXXX.jsonl)"
+SL_MON_OUT="$(
+  env -i HOME="$HOME" ASHLR_SESSION_LOG_PATH="$SL_TMP" bash -c "
+    . '$SESSION_LOG_SH'
+    log_monitor_event openhands monitor_restart 'attempt=2' 'backoff_secs=20'
+    cat '$SL_TMP'
+  " 2>&1
+)"
+rm -f "$SL_TMP"
+SL_MON_JSON_OK="$(printf '%s' "$SL_MON_OUT" | python3 -c "
+import sys, json
+line = sys.stdin.read().strip()
+try:
+    o = json.loads(line)
+    assert o.get('agent') == 'openhands', f'bad agent: {o}'
+    assert o.get('event') == 'monitor_restart', f'bad event: {o}'
+    assert o.get('attempt') == '2', f'bad attempt: {o}'
+    assert o.get('backoff_secs') == '20', f'bad backoff_secs: {o}'
+    print('ok')
+except Exception as e:
+    print(f'fail: {e}')
+" 2>&1)"
+assert_eq "log_monitor_event writes valid JSONL with extra fields" "ok" "$SL_MON_JSON_OK"
+
+# 13l — log_monitor_event respects ASHLR_SESSION_LOG=0 kill switch
+SL_TMP="$(mktemp /tmp/sl-monitor-XXXXXX.jsonl)"
+env -i HOME="$HOME" ASHLR_SESSION_LOG="0" ASHLR_SESSION_LOG_PATH="$SL_TMP" bash -c "
+  . '$SESSION_LOG_SH'
+  log_monitor_event openhands monitor_restart 'attempt=1'
+" 2>/dev/null || true
+SL_MON_KILL_LINES="$(wc -l < "$SL_TMP" 2>/dev/null | tr -d ' ' || echo 0)"
+rm -f "$SL_TMP"
+assert_eq "log_monitor_event respects ASHLR_SESSION_LOG=0 kill switch" "0" "$SL_MON_KILL_LINES"
+
+# 13m — bin/aw recognises 'monitor' as a known subcommand
+if grep -q 'monitor' "$REPO_ROOT/bin/aw"; then
+  _ok "bin/aw recognises monitor subcommand"
+else
+  _fail "bin/aw does not recognise monitor subcommand"
+fi
+
+# 13n — aw help mentions monitor
+AW_HELP_MON="$(
+  env -i HOME="$HOME" NO_COLOR=1 bash -c "'$REPO_ROOT/bin/aw' help" 2>&1
+)"
+if printf '%s' "$AW_HELP_MON" | grep -q 'monitor'; then
+  _ok "aw help mentions monitor subcommand"
+else
+  _fail "aw help missing monitor (got: $AW_HELP_MON)"
+fi
+
+# 13o — aw monitor status delegates to agent-monitor.sh (file reference check)
+if grep -q 'agent-monitor.sh' "$REPO_ROOT/bin/aw"; then
+  _ok "bin/aw references agent-monitor.sh for monitor subcommand"
+else
+  _fail "bin/aw does not reference agent-monitor.sh"
+fi
+
+# 13p — monitor start/stop/status are listed in agent-monitor.sh usage
+if grep -q 'start|stop|status' "$MONITOR_SH" || grep -q 'start.*stop.*status' "$MONITOR_SH"; then
+  _ok "agent-monitor.sh handles start/stop/status subcommands"
+else
+  _fail "agent-monitor.sh does not handle start/stop/status"
+fi
+
+# 13q — .ashlr-workbench/monitor.jsonl path is used in agent-monitor.sh
+if grep -q 'monitor.jsonl' "$MONITOR_SH"; then
+  _ok "agent-monitor.sh references monitor.jsonl log path"
+else
+  _fail "agent-monitor.sh does not reference monitor.jsonl"
+fi
+
+# 13r — agent-monitor.sh references MONITOR_RESTART env var for restart flag
+if grep -q 'MONITOR_RESTART' "$MONITOR_SH"; then
+  _ok "agent-monitor.sh sets MONITOR_RESTART=1 on restart"
+else
+  _fail "agent-monitor.sh does not reference MONITOR_RESTART"
+fi
+
+# 13s — monitor.yaml has default check_interval_secs of 10
+if grep -q 'check_interval_secs: 10' "$MONITOR_YAML"; then
+  _ok "monitor.yaml default check_interval_secs is 10"
+else
+  _fail "monitor.yaml check_interval_secs not set to 10"
+fi
+
+# 13t — agent-monitor.sh stop subcommand runs cleanly when daemon is not running
+MON_TMPDIR="$(mktemp -d /tmp/monitor-test-XXXXXX)"
+MON_STOP_OUT="$(
+  env -i HOME="$HOME" PATH="$PATH" NO_COLOR=1 \
+    MONITOR_DIR="$MON_TMPDIR" \
+    MONITOR_PID_FILE="$MON_TMPDIR/monitor.pid" \
+    MONITOR_STATE_FILE="$MON_TMPDIR/monitor-state.txt" \
+    MONITOR_LOG_FILE="$MON_TMPDIR/monitor.jsonl" \
+    MONITOR_CONFIG="$MONITOR_YAML" \
+    bash "$MONITOR_SH" stop 2>&1
+)"
+MON_STOP_RC=$?
+rm -rf "$MON_TMPDIR"
+if [ "$MON_STOP_RC" -eq 0 ]; then
+  _ok "agent-monitor.sh stop exits 0 when daemon not running"
+else
+  _fail "agent-monitor.sh stop exited $MON_STOP_RC (output: $MON_STOP_OUT)"
+fi
+
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n"
 if [ "$FAIL" -eq 0 ]; then

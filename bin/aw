@@ -293,6 +293,25 @@ cmd_llm_status() {
   llm_router_status
 }
 
+# ─── monitor ──────────────────────────────────────────────────────────────────
+cmd_monitor() {
+  local subcmd="${1:-status}"
+  shift || true
+  local script="$SCRIPTS_DIR/agent-monitor.sh"
+  if [ ! -x "$script" ]; then
+    bad "agent-monitor.sh not found or not executable: $script"
+    return 1
+  fi
+  case "$subcmd" in
+    start|stop|status) "$script" "$subcmd" "$@" ;;
+    *)
+      bad "unknown monitor subcommand: $subcmd"
+      echo "Usage: aw monitor [start|stop|status]"
+      exit 2
+      ;;
+  esac
+}
+
 # ─── doctor ───────────────────────────────────────────────────────────────────
 cmd_doctor() {
   title "aw doctor — diagnosing common issues"
@@ -431,6 +450,7 @@ ${C_BOLD}COMMANDS${C_RESET}
   ${C_CYAN}resume${C_RESET}          resume where you left off (restores last session context)
   ${C_CYAN}summary${C_RESET}         summarize the most recent session
   ${C_CYAN}llm-status${C_RESET}      probe all LLM endpoints and show latency matrix
+  ${C_CYAN}monitor${C_RESET} <sub>   agent auto-restart daemon (start|stop|status)
   ${C_CYAN}help${C_RESET}            show this message
 
 ${C_BOLD}EXAMPLES${C_RESET}
@@ -456,11 +476,11 @@ EOF
 
 # ─── Interactive mode detection ───────────────────────────────────────────────
 # Known subcommands that are NOT interactive-mode triggers.
-KNOWN_SUBCOMMANDS="start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|help"
+KNOWN_SUBCOMMANDS="start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|monitor|help"
 
 is_known_subcommand() {
   case "$1" in
-    start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|resume|summary|auto|llm-status|help) return 0 ;;
+    start|stop|status|st|health|healthcheck|update|upgrade|doctor|diagnose|log|mode|layout|resume|summary|auto|llm-status|monitor|help) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -527,6 +547,7 @@ case "$cmd" in
   resume)             exec "$SCRIPTS_DIR/session-resume.sh" "$@" ;;
   summary)            exec "$SCRIPTS_DIR/session-summary.sh" "$@" ;;
   llm-status)         cmd_llm_status "$@" ;;
+  monitor)            cmd_monitor    "$@" ;;
   help)               cmd_help        ;;
   *)
     bad "unknown command: $cmd"

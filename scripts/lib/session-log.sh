@@ -74,3 +74,39 @@ log_session_event() {
 
 log_session_start() { log_session_event "$1" "session_start" "${2:-}"; }
 log_session_end()   { log_session_event "$1" "session_end"   "${2:-}"; }
+
+# log_monitor_event AGENT EVENT [EXTRA_JSON_KV...]
+#   Write a monitor lifecycle event (restart, crash, heartbeat) to the
+#   cross-agent session log so it appears in `aw log` alongside normal session
+#   events. EXTRA_JSON_KV pairs are plain key=value strings; values must not
+#   contain unescaped quotes.
+#
+#   Example:
+#     log_monitor_event openhands monitor_restart "attempt=2" "backoff_secs=20"
+log_monitor_event() {
+  local agent="${1:-unknown}" event="${2:-monitor_event}"
+  shift 2 || true
+  [ "${ASHLR_SESSION_LOG:-1}" = "0" ] && return 0
+  mkdir -p "$(dirname "$SESSION_LOG_FILE")" 2>/dev/null || return 0
+
+  local ts
+  ts="$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ" 2>/dev/null)"
+  case "$ts" in *3NZ|"") ts="$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")" ;; esac
+
+  local session="${ASHLR_SESSION_ID:-${_ASHLR_SESSION_LOG_ID:-}}"
+  [ -z "$session" ] && session="${agent}-monitor-$$"
+
+  # Start with required fields
+  local extra=""
+  local pair key val
+  for pair in "$@"; do
+    key="${pair%%=*}"
+    val="${pair#*=}"
+    extra="${extra},\"${key}\":\"${val}\""
+  done
+
+  printf '{"ts":"%s","agent":"%s","event":"%s","session":"%s"%s}\n' \
+    "$ts" "$agent" "$event" "$session" "$extra" \
+    >> "$SESSION_LOG_FILE" 2>/dev/null || true
+  return 0
+}
